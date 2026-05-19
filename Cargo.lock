@@ -326,34 +326,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "irpc-schema"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "bytes",
- "derive_more",
- "hex",
- "irpc",
- "irpc-schema-derive",
- "postcard",
- "serde",
- "testresult",
-]
-
-[[package]]
-name = "irpc-schema-derive"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "postcard",
- "proc-macro2",
- "quote",
- "serde",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -459,6 +431,34 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
+]
+
+[[package]]
+name = "n0-schema"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "bytes",
+ "derive_more",
+ "hex",
+ "irpc",
+ "n0-schema-derive",
+ "postcard",
+ "serde",
+ "testresult",
+]
+
+[[package]]
+name = "n0-schema-derive"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "postcard",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn 1.0.109",
 ]
 
 [[package]]

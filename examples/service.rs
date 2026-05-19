@@ -1,6 +1,6 @@
 use anyhow::Result;
 use irpc::channel::none::{NoReceiver, NoSender};
-use irpc_schema::{schema, serialize_service};
+use n0_schema::{schema, serialize_service};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

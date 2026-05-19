@@ -1,5 +1,5 @@
 use anyhow::Result;
-use irpc_schema::{schema, serialize_stable};
+use n0_schema::{schema, serialize_stable};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 mod v1 {
