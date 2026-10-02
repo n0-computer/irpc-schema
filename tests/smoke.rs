@@ -176,6 +176,121 @@ mod two_stable_enums_in_one_module {
     }
 }
 
+mod flatten {
+    use irpc_schema::StableEnum;
+    use irpc_schema_derive::serialize_stable;
+    use testresult::TestResult;
+
+    #[derive(Debug, PartialEq)]
+    #[serialize_stable]
+    enum Numbers {
+        Int(u32),
+    }
+
+    #[derive(Debug, PartialEq)]
+    #[serialize_stable]
+    enum Words {
+        Word(String),
+    }
+
+    #[derive(Debug, PartialEq)]
+    #[serialize_stable]
+    enum Combined {
+        Flag(bool),
+        #[flatten]
+        Numbers(Numbers),
+        #[flatten]
+        Words(Words),
+    }
+
+    #[derive(Debug, PartialEq)]
+    #[serialize_stable]
+    enum MoreNumbers {
+        Int(u32),
+    }
+
+    #[derive(Debug, PartialEq)]
+    #[serialize_stable]
+    enum Ambiguous {
+        #[flatten]
+        Numbers(Numbers),
+        #[flatten]
+        MoreNumbers(MoreNumbers),
+    }
+
+    #[test]
+    fn test_flatten_serializes_like_the_inner_enum() -> TestResult<()> {
+        let inner = postcard::to_allocvec(&Words::Word("hi".to_string()))?;
+        let outer = postcard::to_allocvec(&Combined::Words(Words::Word("hi".to_string())))?;
+        assert_eq!(inner, outer);
+        Ok(())
+    }
+
+    #[test]
+    fn test_flatten_deserializes_inner_enum_bytes() -> TestResult<()> {
+        let bytes = postcard::to_allocvec(&Numbers::Int(7))?;
+        let value: Combined = postcard::from_bytes(&bytes)?;
+        assert_eq!(value, Combined::Numbers(Numbers::Int(7)));
+        let bytes = postcard::to_allocvec(&Words::Word("hi".to_string()))?;
+        let value: Combined = postcard::from_bytes(&bytes)?;
+        assert_eq!(value, Combined::Words(Words::Word("hi".to_string())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_flatten_keeps_payload_variants() -> TestResult<()> {
+        let bytes = postcard::to_allocvec(&Combined::Flag(true))?;
+        let value: Combined = postcard::from_bytes(&bytes)?;
+        assert_eq!(value, Combined::Flag(true));
+        Ok(())
+    }
+
+    #[test]
+    fn test_flatten_rejects_unknown_hash() -> TestResult<()> {
+        let bytes = postcard::to_allocvec(&Combined::Flag(true))?;
+        assert!(postcard::from_bytes::<Numbers>(&bytes).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_flatten_schemas_lists_inner_variants() {
+        let names: Vec<_> = Combined::schemas().map(|(name, _, _)| name).collect();
+        assert_eq!(names, ["Flag", "Int", "Word"]);
+        let hashes: Vec<_> = <Combined as StableEnum>::schemas()
+            .map(|(_, _, hash)| hash)
+            .collect();
+        let (_, _, int) = Numbers::schemas().next().unwrap();
+        assert_eq!(hashes[1], int);
+    }
+
+    #[derive(Debug, PartialEq)]
+    #[serialize_stable]
+    enum Duplicate {
+        First(u32),
+        Second(u32),
+    }
+
+    #[test]
+    fn test_flatten_gives_a_shared_hash_to_the_first_variant() -> TestResult<()> {
+        let bytes = postcard::to_allocvec(&MoreNumbers::Int(7))?;
+        let value: Ambiguous = postcard::from_bytes(&bytes)?;
+        assert_eq!(value, Ambiguous::Numbers(Numbers::Int(7)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_flatten_lists_a_shared_hash_once() {
+        let names: Vec<_> = Ambiguous::schemas().map(|(name, _, _)| name).collect();
+        assert_eq!(names, ["Int"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "First and Second in Duplicate have the same schema hash")]
+    fn test_payload_variants_with_the_same_hash_panic() {
+        let _ = Duplicate::schemas().count();
+    }
+}
+
 mod generics_and_common_types {
     use std::{marker::PhantomData, time::Duration};
 

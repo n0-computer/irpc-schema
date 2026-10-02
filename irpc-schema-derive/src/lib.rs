@@ -348,12 +348,17 @@ fn generate_nominal_schema(
 ///
 /// Each variant must have a single unnamed field of distinct type. Each type
 /// must implement `HasSchema`.
+///
+/// A variant marked `#[flatten]` holds another stable enum. It serializes
+/// exactly like the inner enum, and deserializes from any hash that the inner
+/// enum knows. If several variants know a hash, the first one gets it.
 #[proc_macro_attribute]
 pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemEnum);
-    stable_enum(&input, |field_type| {
+    stable_enum(input, |field_type| {
         quote! { <#field_type as ::irpc_schema::HasSchema>::schema() }
     })
+    .unwrap_or_else(syn::Error::into_compile_error)
     .into()
 }
 
@@ -376,16 +381,16 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// all channlels payload types.
 #[proc_macro_attribute]
 pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Service for which this macro is applied
     let service = parse_macro_input!(attr as syn::Ident);
     let input = parse_macro_input!(item as ItemEnum);
-    stable_enum(&input, |field_type| {
+    stable_enum(input, |field_type| {
         quote! { <#field_type as ::irpc_schema::ChannelsSchema<#service>>::schema() }
     })
+    .unwrap_or_else(syn::Error::into_compile_error)
     .into()
 }
 
-/// Generates the serde impls and the `schemas` function for a stable enum.
+/// Generates the serde impls, the `StableEnum` impl, and the `schemas` function for a stable enum.
 ///
 /// `schema_of` returns an expression that evaluates to the schema of a
 /// variant with the given field type.
@@ -395,72 +400,92 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `irpc_schema`, so the user crate does not need a `serde` dependency
 /// under that name.
 fn stable_enum(
-    input: &ItemEnum,
+    mut input: ItemEnum,
     schema_of: impl Fn(&syn::Type) -> proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
+) -> syn::Result<proc_macro2::TokenStream> {
     let enum_name = &input.ident;
 
-    // Make sure all variants have a single unnamed field
-    let mut variant_names = Vec::new();
-    let mut field_types = Vec::new();
-    for variant in &input.variants {
-        match &variant.fields {
-            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                variant_names.push(&variant.ident);
-                field_types.push(&fields.unnamed[0].ty);
+    // Split the variants into payload variants and flattened variants.
+    let mut payload_names = Vec::new();
+    let mut payload_types = Vec::new();
+    let mut flatten_names = Vec::new();
+    let mut flatten_types = Vec::new();
+    // Each variant in declaration order, as (name, type, flatten).
+    let mut variants = Vec::new();
+    for variant in &mut input.variants {
+        let attr_count = variant.attrs.len();
+        variant.attrs.retain(|attr| !attr.path.is_ident("flatten"));
+        let flatten = variant.attrs.len() != attr_count;
+        let ty = match &variant.fields {
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => fields.unnamed[0].ty.clone(),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    &variant.fields,
+                    "each variant must have a single unnamed field",
+                ))
             }
-            _ => panic!("HashDiscriminator only supports variants with a single unnamed field"),
+        };
+        variants.push((variant.ident.clone(), ty.clone(), flatten));
+        if flatten {
+            flatten_names.push(variant.ident.clone());
+            flatten_types.push(ty);
+        } else {
+            payload_names.push(variant.ident.clone());
+            payload_types.push(ty);
         }
     }
 
-    let schema_struct_fields = variant_names.iter().map(|variant_name| {
-        quote! { #variant_name: ::irpc_schema::SchemaAndHash }
-    });
-
     let schema_struct_inits =
-        variant_names
+        payload_names
             .iter()
-            .zip(field_types.iter())
+            .zip(&payload_types)
             .map(|(variant_name, field_type)| {
                 let schema = schema_of(field_type);
                 quote! {
                     #variant_name: ::irpc_schema::SchemaAndHash::from(#schema)
                 }
             });
+    let payload_name_strs: Vec<_> = payload_names.iter().map(|name| name.to_string()).collect();
+    let enum_name_str = enum_name.to_string();
 
-    let schema_struct_to_tuples = variant_names.iter().map(|variant_name| {
-        let ident = variant_name.to_string();
-        quote! {
-            (#ident, &schemas.#variant_name.schema, schemas.#variant_name.hash)
+    // A hash can only lead to one variant. So the first variant in
+    // declaration order that knows a hash gets it, for listing and for
+    // deserializing.
+    let push_entries = variants.iter().map(|(name, ty, flatten)| {
+        if *flatten {
+            quote! {
+                for entry in <#ty as ::irpc_schema::StableEnum>::schemas() {
+                    push(entry);
+                }
+            }
+        } else {
+            let name_str = name.to_string();
+            quote! {
+                push((#name_str, &schemas.#name.schema, schemas.#name.hash));
+            }
         }
     });
-
-    let serialize_arms = variant_names.iter().map(|variant_name| {
-        quote! {
-            #enum_name::#variant_name(payload) => {
-                let mut tup = serializer.serialize_tuple(2)?;
-                tup.serialize_element(&schemas.#variant_name.hash)?;
-                tup.serialize_element(payload)?;
-                tup.end()
+    let deserialize_branches = variants.iter().map(|(name, ty, flatten)| {
+        if *flatten {
+            quote! {
+                if let ::std::option::Option::Some(inner) =
+                    <#ty as ::irpc_schema::StableEnum>::deserialize_payload(hash, seq)?
+                {
+                    return ::std::result::Result::Ok(::std::option::Option::Some(Self::#name(inner)));
+                }
+            }
+        } else {
+            quote! {
+                if *hash == schemas.#name.hash {
+                    let payload = seq.next_element::<#ty>()?.ok_or_else(||
+                        <A::Error as serde::de::Error>::custom("missing payload"))?;
+                    return ::std::result::Result::Ok(::std::option::Option::Some(Self::#name(payload)));
+                }
             }
         }
     });
 
-    let deserialize_branches =
-        variant_names
-            .iter()
-            .zip(field_types.iter())
-            .map(|(variant_name, field_type)| {
-                quote! {
-                    if hash == schemas.#variant_name.hash {
-                        let payload = seq.next_element::<#field_type>()?.ok_or_else(||
-                            serde::de::Error::custom("missing payload"))?;
-                        return ::std::result::Result::Ok(#enum_name::#variant_name(payload));
-                    }
-                }
-            });
-
-    quote! {
+    Ok(quote! {
         #input
 
         const _: () = {
@@ -469,23 +494,85 @@ fn stable_enum(
             #[allow(non_snake_case)]
             #[derive(Debug)]
             struct Schemas {
-                #(#schema_struct_fields),*
+                #(#payload_names: ::irpc_schema::SchemaAndHash),*
             }
 
             static SCHEMAS: ::std::sync::OnceLock<Schemas> = ::std::sync::OnceLock::new();
 
             impl Schemas {
+                /// Returns the schemas of the payload variants.
+                ///
+                /// # Panics
+                ///
+                /// Panics on first use if two payload variants have the same
+                /// schema hash, because the second one could never be
+                /// deserialized.
                 fn get() -> &'static Self {
-                    SCHEMAS.get_or_init(|| Self {
-                        #(#schema_struct_inits),*
+                    SCHEMAS.get_or_init(|| {
+                        let schemas = Self {
+                            #(#schema_struct_inits),*
+                        };
+                        let mut seen = ::std::collections::BTreeMap::new();
+                        let own: &[(&str, [u8; 32])] = &[#((#payload_name_strs, schemas.#payload_names.hash)),*];
+                        for &(name, hash) in own {
+                            if let ::std::option::Option::Some(other) = seen.insert(hash, name) {
+                                ::std::panic!(
+                                    "{} and {} in {} have the same schema hash",
+                                    other,
+                                    name,
+                                    #enum_name_str,
+                                );
+                            }
+                        }
+                        schemas
                     })
                 }
             }
 
-            impl #enum_name {
-                pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::irpc_schema::Schema, [u8; 32])> {
+            type Entry = (&'static str, &'static ::irpc_schema::Schema, [u8; 32]);
+
+            static ENTRIES: ::std::sync::OnceLock<::std::vec::Vec<Entry>> = ::std::sync::OnceLock::new();
+
+            /// Returns one entry per schema hash, in declaration order.
+            ///
+            /// A hash that a flattened enum shares with an earlier variant
+            /// belongs to the earlier variant.
+            fn entries() -> &'static [Entry] {
+                ENTRIES.get_or_init(|| {
                     let schemas = Schemas::get();
-                    [#(#schema_struct_to_tuples),*].into_iter()
+                    let mut entries = ::std::vec::Vec::new();
+                    let mut seen = ::std::collections::BTreeSet::new();
+                    let mut push = |entry: Entry| {
+                        if seen.insert(entry.2) {
+                            entries.push(entry);
+                        }
+                    };
+                    #(#push_entries)*
+                    let _ = schemas;
+                    entries
+                })
+            }
+
+            impl ::irpc_schema::StableEnum for #enum_name {
+                fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::irpc_schema::Schema, [u8; 32])> {
+                    entries().iter().copied()
+                }
+
+                fn deserialize_payload<'de, A: serde::de::SeqAccess<'de>>(
+                    hash: &[u8; 32],
+                    seq: &mut A,
+                ) -> ::std::result::Result<::std::option::Option<Self>, A::Error> {
+                    let schemas = Schemas::get();
+                    #(#deserialize_branches)*
+                    let _ = (schemas, seq);
+                    ::std::result::Result::Ok(::std::option::Option::None)
+                }
+            }
+
+            impl #enum_name {
+                /// Returns the name, schema, and schema hash of each variant.
+                pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::irpc_schema::Schema, [u8; 32])> {
+                    <Self as ::irpc_schema::StableEnum>::schemas()
                 }
             }
 
@@ -495,9 +582,18 @@ fn stable_enum(
                     S: serde::Serializer,
                 {
                     use serde::ser::SerializeTuple;
-                    let schemas = Schemas::get();
                     match self {
-                        #(#serialize_arms),*
+                        #(
+                            Self::#payload_names(payload) => {
+                                let mut tup = serializer.serialize_tuple(2)?;
+                                tup.serialize_element(&Schemas::get().#payload_names.hash)?;
+                                tup.serialize_element(payload)?;
+                                tup.end()
+                            }
+                        )*
+                        #(
+                            Self::#flatten_names(inner) => serde::Serialize::serialize(inner, serializer),
+                        )*
                     }
                 }
             }
@@ -522,9 +618,8 @@ fn stable_enum(
                         {
                             let hash = seq.next_element::<[u8; 32]>()?.ok_or_else(||
                                 serde::de::Error::custom("missing hash"))?;
-                            let schemas = Schemas::get();
-                            #(#deserialize_branches)*
-                            ::std::result::Result::Err(serde::de::Error::custom("unknown discriminator"))
+                            <#enum_name as ::irpc_schema::StableEnum>::deserialize_payload(&hash, &mut seq)?
+                                .ok_or_else(|| serde::de::Error::custom("unknown discriminator"))
                         }
                     }
 
@@ -532,5 +627,5 @@ fn stable_enum(
                 }
             }
         };
-    }
+    })
 }

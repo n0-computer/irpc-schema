@@ -4,7 +4,7 @@ use std::{
     fmt, vec,
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{de::SeqAccess, Deserialize, Serialize};
 
 /// Wraps a schema with a name.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,6 +252,27 @@ impl Schema {
 pub trait HasSchema {
     /// Returns the schema for this type.
     fn schema() -> Schema;
+}
+
+/// An enum that serializes each variant as a schema hash followed by the payload.
+///
+/// The `serialize_stable` and `serialize_service` macros implement this
+/// trait. A variant marked `#[flatten]` holds another stable enum and
+/// serializes exactly like it.
+pub trait StableEnum: Sized {
+    /// Returns the name, schema, and schema hash of each variant.
+    ///
+    /// A flattened variant contributes the entries of the enum it holds.
+    fn schemas() -> impl Iterator<Item = (&'static str, &'static Schema, [u8; 32])>;
+
+    /// Deserializes the payload of the variant with the schema hash `hash`.
+    ///
+    /// Returns `Ok(None)` without reading from `seq` if no variant has this
+    /// hash.
+    fn deserialize_payload<'de, A: SeqAccess<'de>>(
+        hash: &[u8; 32],
+        seq: &mut A,
+    ) -> Result<Option<Self>, A::Error>;
 }
 
 // Declare Schema for atom types
