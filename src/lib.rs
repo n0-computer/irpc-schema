@@ -23,9 +23,43 @@ pub use irpc_schema_derive::{schema, serialize_stable, HasSchema};
 #[doc(hidden)]
 pub mod __private {
     //! Re-exports for the code that the derive macros generate.
+    use std::cell::RefCell;
+
     #[cfg(feature = "irpc")]
     pub use irpc;
     pub use serde;
+
+    use crate::Schema;
+
+    thread_local! {
+        /// The types whose schema this thread computes right now.
+        static IN_PROGRESS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Computes a schema, or returns [`Schema::Ref`] for a type whose schema is already being computed.
+    ///
+    /// The schema of a recursive type contains itself. The generated
+    /// `HasSchema` impls call this, so that the inner occurrence becomes a
+    /// reference to the enclosing type instead of an endless recursion.
+    pub fn recursion_guard(
+        type_name: &'static str,
+        name: &str,
+        schema: impl FnOnce() -> Schema,
+    ) -> Schema {
+        if IN_PROGRESS.with_borrow(|types| types.contains(&type_name)) {
+            return Schema::Ref(name.to_string());
+        }
+        IN_PROGRESS.with_borrow_mut(|types| types.push(type_name));
+        // Pops the type also when `schema` panics.
+        struct Pop;
+        impl Drop for Pop {
+            fn drop(&mut self) {
+                IN_PROGRESS.with_borrow_mut(|types| types.pop());
+            }
+        }
+        let _pop = Pop;
+        schema()
+    }
 }
 
 /// The schema enum
@@ -53,6 +87,8 @@ pub enum Schema {
     Set(Box<Schema>),
     /// a map type
     Map(Box<Schema>, Box<Schema>),
+    /// a reference to the named type that contains it, for recursive types
+    Ref(String),
 }
 
 /// Combines a schema with its stable hash.
@@ -142,6 +178,9 @@ impl fmt::Display for Schema {
 
             // Map type: Map(X, Y)
             Schema::Map(key, value) => write!(f, "{{{}:{}}}", key, value),
+
+            // Reference to an enclosing named type: @Name
+            Schema::Ref(name) => write!(f, "@{}", name),
         }
     }
 }
@@ -169,6 +208,8 @@ impl Schema {
             Schema::Bottom => format!("{}⊥", indentation),
             Schema::Unit => format!("{}()", indentation),
             Schema::Atom(name) => format!("{}\"{}\"", indentation, name),
+
+            Schema::Ref(name) => format!("{}@{}", indentation, name),
 
             // Product: Each field on a new line, indented
             Schema::Product(types) => {

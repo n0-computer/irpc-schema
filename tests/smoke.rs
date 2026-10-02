@@ -397,3 +397,37 @@ mod field_atoms {
         assert_eq!(fields[0].1, Schema::Atom("other::Foreign".to_string()));
     }
 }
+
+mod recursion {
+    use irpc_schema::{HasSchema, Named, Schema};
+
+    #[derive(HasSchema)]
+    enum Op {
+        Get(u32),
+        Txn(Txn),
+    }
+
+    #[derive(HasSchema)]
+    struct Txn {
+        ops: Vec<Op>,
+    }
+
+    #[test]
+    fn test_recursive_type_refers_to_itself() {
+        let txn = Schema::named(
+            "Txn",
+            Schema::Struct(vec![Named::new(
+                "ops",
+                Schema::Seq(Box::new(Schema::Ref("Op".to_string()))),
+            )]),
+        );
+        let expected = Schema::named(
+            "Op",
+            Schema::Enum(vec![
+                Named::new("Get", Schema::Product(vec![u32::schema()])),
+                Named::new("Txn", Schema::Product(vec![txn])),
+            ]),
+        );
+        assert_eq!(Op::schema(), expected);
+    }
+}

@@ -54,7 +54,8 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => panic!("Unsupported schema type"),
     };
 
-    let schema_impl = impl_has_schema(&input, schema_impl);
+    let ref_name = explicit_name.unwrap_or_else(|| name.to_string());
+    let schema_impl = impl_has_schema(&input, &ref_name, schema_impl);
     let expanded = quote! {
         #output
 
@@ -65,8 +66,11 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Returns the `HasSchema` impl for `input`, with a `HasSchema` bound on each type parameter.
+///
+/// `ref_name` names the type in a `Schema::Ref` when the type contains itself.
 fn impl_has_schema(
     input: &DeriveInput,
+    ref_name: &str,
     schema_impl: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let name = &input.ident;
@@ -80,7 +84,11 @@ fn impl_has_schema(
     quote! {
         impl #impl_generics ::irpc_schema::HasSchema for #name #ty_generics #where_clause {
             fn schema() -> ::irpc_schema::Schema {
-                #schema_impl
+                ::irpc_schema::__private::recursion_guard(
+                    ::std::any::type_name::<Self>(),
+                    #ref_name,
+                    || #schema_impl,
+                )
             }
         }
     }
@@ -98,7 +106,7 @@ fn impl_has_schema(
 pub fn derive_has_schema(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     let schema_impl = generate_nominal_schema(&input.ident, &input.data, None);
-    impl_has_schema(&input, schema_impl).into()
+    impl_has_schema(&input, &input.ident.to_string(), schema_impl).into()
 }
 
 /// Returns the schema of a field: the schema of its type, or the atom set by `#[schema(atom = "..")]`.
