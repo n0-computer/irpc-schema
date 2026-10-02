@@ -1,0 +1,462 @@
+# Combining and versioning irpc protocols with irpc-schema
+
+## TODO
+
+- [x] write plan
+- [x] read irpc 0.17, irpc-derive 0.17, irpc-iroh 0.17, irpc-schema
+- [x] example `combined`: first naive attempt, record gaps
+- [x] example `combined`: workaround inside the example (`Mux`)
+- [x] example `versioning`: store v1 (String) and v2 (Bytes)
+- [x] example `combined`: `AppApi` shares one connection for both protocols
+- [x] P1 and P3 in irpc-schema (branch `Frando/feat-flatten`)
+- [x] versioning with flatten, frozen v1, and a v1 hash lock (branch
+      `Frando/feat-versioning`)
+- [x] probe: what a server does with a request it does not know (F9)
+- [ ] decide on the new-client/old-server options (N1 to N3)
+- [ ] P2 (`#[derive(HasSchema)]`)
+- [ ] irpc changes: F9 fix (N1), optionally P4
+- [ ] final review
+
+## Branches
+
+- `Frando/api`: the examples with workarounds only (hand-written `Mux`,
+  v2 enum that lists the v1 requests), and this plan.
+- `Frando/feat-flatten` (on `Frando/api`): P3 and P1 in irpc-schema.
+  The `combined` example uses a flattened `AppProtocol` and the stock
+  `IrohProtocol`. The `Mux` is gone.
+- `Frando/feat-versioning` (on `Frando/feat-flatten`): the `versioning`
+  example rebuilt on P1, and the versioning notes below.
+
+## Goal
+
+Two examples in `examples/`:
+
+- `combined`: two protocols (`ping`, `store`) that each work on their
+  own, and that one server can also serve together on a single ALPN.
+  The combination uses the schema hash tags from `serialize_service`.
+- `versioning`: the store protocol in v1 (String keys and values) and
+  v2 (Bytes keys and values). A v2 server also serves v1 clients.
+
+Both use the irpc macros (`rpc_requests`, `wrap`) and `irpc-iroh`.
+Then find the gaps, work around them in the examples, and propose
+changes to irpc-schema and to irpc. Keep irpc changes minimal.
+
+## Context: how the pieces fit
+
+### irpc
+
+- The protocol enum `S` implements `Service`. `S::Message` is the
+  message enum whose variants hold `WithChannels<Req, S>`.
+- `Channels<S>` is implemented per request type and per service. It
+  sets `Tx` and `Rx`. A request type can implement `Channels` for many
+  services.
+- The client side (`Client<S>::rpc` and friends) requires
+  `S: From<Req>` and `Req: Channels<S>`. It serializes `S` with
+  postcard, length prefixed, as the first frame of a new bi stream
+  (`rpc::prepare_write`).
+- The server side (`irpc_iroh::handle_connection::<S>`) accepts a bi
+  stream, reads one length prefixed frame, and deserializes it as `S`.
+  Then it calls `Handler<S>`:
+  `Arc<dyn Fn(S, RecvStream, SendStream) -> BoxFuture<Result<(), SendError>>>`.
+- `RemoteService::with_remote_channels(self, rx, tx) -> S::Message`
+  turns the protocol value plus the streams into a message.
+  `RemoteService::remote_handler(LocalSender<S>)` builds a handler that
+  forwards to a local actor.
+- `IrohProtocol::new(handler)` takes any `Handler<S>`. So a server can
+  install its own dispatch logic without changes to irpc.
+
+### irpc-derive (`rpc_requests`)
+
+- Every variant must hold one unnamed field of a distinct type, or use
+  `#[wrap(Name, derive(..))]` to generate that type from the fields.
+- `wrap` emits `#[derive(Debug, Serialize, Deserialize, <extra>)]` on
+  the generated struct. Only derives go into `derive(..)`.
+- Variants with `#[rpc(..)]` get `Channels<S>`, `From<Req> for S`,
+  `From<WithChannels<Req, S>> for S::Message`, and an arm in
+  `with_remote_channels`.
+- The macro does not add serde derives to the protocol enum. The user
+  adds them, or another attribute macro does. That is where
+  `serialize_service` fits in.
+
+### irpc-schema
+
+- `HasSchema` gives a structural description of a type. `schema` is an
+  attribute macro that implements it (`Atom`, `Structural`, `Nominal`).
+- `serialize_stable` and `serialize_service(S)` implement serde for an
+  enum. Each variant is written as the tuple `(hash, payload)`, where
+  `hash` is the blake3 hash of the schema of the payload type.
+- For `serialize_service(S)`, the schema is
+  `<(Req, Req::Rx, Req::Tx)>::schema()` via `ChannelsSchema<S>`. The
+  hash depends on the request type and on the channel types. It does
+  not depend on `S`. This is the property we can use to combine
+  protocols: the same request with the same channels has the same tag
+  in every service.
+
+## Findings
+
+### F1: `rpc_requests` output needs a direct `tracing` dependency
+
+The generated `parent_span` impl uses `::tracing::Span`. A crate that
+uses the macro without `no_spans` must depend on `tracing` itself.
+
+- Workaround: add `tracing` as a (dev) dependency.
+- irpc change: re-export tracing (for example `irpc::__private::tracing`)
+  and use that path in the macro. Same applies to `::serde` in the
+  `wrap` output.
+
+### F2: `wrap` types cannot implement `HasSchema`
+
+`schema` is an attribute macro, not a derive. `wrap(Name, derive(..))`
+accepts only derives. So a request type generated by `wrap` has no
+`HasSchema`, and `serialize_service` fails with
+"`Ping: ChannelsSchema<PingProtocol>` is not satisfied".
+
+- Workaround: do not use `wrap`. Write the request structs by hand with
+  `#[schema(Nominal)]`.
+- irpc-schema change: add `#[derive(HasSchema)]` with an optional
+  helper attribute `#[schema(Nominal)]`, `#[schema(Atom, name = "..")]`.
+  Then `#[wrap(Ping, derive(HasSchema))]` works with no irpc change.
+  Default kind: `Nominal`.
+
+### F3: protocols cannot be nested
+
+`enum AppProtocol { Ping(PingProtocol), Store(StoreProtocol) }` fails
+in both macros:
+
+- `rpc_requests` wants `PingProtocol: Channels<AppProtocol>`. A nested
+  protocol has no single `Tx`/`Rx` pair, so this can never hold.
+- `serialize_service` wants `PingProtocol: HasSchema` and treats the
+  whole nested protocol as one payload with one hash. That is the wrong
+  wire format: a `PingProtocol` client writes `(hash(Ping), Ping)`, not
+  `(hash(PingProtocol), (hash(Ping), Ping))`.
+
+What we want on the wire is a flat union: the combined protocol accepts
+any tag that one of its sub-protocols knows, and it serializes each
+sub-protocol value exactly as the sub-protocol does. Then a plain
+`Client<PingProtocol>` can talk to the combined server.
+
+### F4: `schemas()` is an inherent fn, not a trait
+
+`serialize_service` generates `Proto::schemas()` as an inherent fn.
+Generic code cannot reach it from a type parameter `S`. The `Mux` in
+the `combined` example therefore takes the schemas iterator as a
+separate argument next to the `LocalSender<S>`.
+
+- Workaround: pass `PingProtocol::schemas()` explicitly.
+- irpc-schema change: a trait that the macros implement (see P1).
+
+### F5: two stable enums in one module do not compile
+
+`serialize_stable` and `serialize_service` emit `use std::sync::OnceLock;`
+at the call site. A second enum in the same module fails with E0252
+("the name `OnceLock` is defined multiple times"). The macros also emit
+a `{Name}Schemas` struct and a `__{Name}_SCHEMAS` static at the call
+site, and use `serde::` paths that break if the user renamed or does
+not depend on `serde`.
+
+- Workaround: one stable enum per module. Both examples do this.
+- irpc-schema change: wrap the helper items in `const _: () = { .. };`,
+  use `::std::sync::OnceLock` by full path, and use a `serde` re-export
+  from `irpc_schema` (for example `::irpc_schema::__private::serde`).
+
+### F6: versioning by listing old requests repeats their channel types
+
+The `versioning` example follows `examples/service.rs`: the v2 enum
+also lists `V1Put(v1::Put)` and friends. Each old variant must restate
+the v1 `#[rpc(tx = ..)]` exactly. The hash covers the channel types, so
+a typo does not fail to compile. It makes old clients fail at runtime
+with "unknown discriminator". The example guards this with a startup
+check that every v1 hash is in the v2 hash set.
+
+The v2 enum also carries the v1 variants forever. v2 clients can send
+them, and the v2 `StoreMessage` has six variants instead of three.
+
+- Workaround: the startup check, or the same check in a unit test.
+- Better: serve v1 as its own protocol next to v2 on the same ALPN,
+  with the same mechanism as the `combined` example (see P1).
+
+### F7: the `Mux` workaround copies irpc internals
+
+The `Mux` in the `combined` example reimplements the request read loop
+of `irpc_iroh::handle_connection` (accept a bi stream, read a varint
+length, check `MAX_MESSAGE_SIZE`, read the frame). It then peeks at the
+first 32 bytes, which is only valid while `S::SPAN_PROPAGATION` is
+false, and it loses what irpc-iroh does around the loop: span
+propagation, 0-RTT (`Iroh0RttProtocol`), and the close codes on
+oversized frames.
+
+Two ways out:
+
+- irpc change (small): make the raw frame read public, for example
+  `irpc_iroh::read_request_frame(conn) -> io::Result<Option<(Vec<u8>, RecvStream, SendStream)>>`
+  and the same in `irpc::rpc`. The `Mux` then keeps only its dispatch.
+- No irpc change: make the combined protocol a real `S` whose serde
+  impl dispatches by hash. Then the stock `IrohProtocol` and
+  `handle_connection` work unchanged (see P1).
+
+### F8: `irpc_iroh::client` always opens its own connection
+
+`irpc_iroh::client(endpoint, addr, alpn)` wraps a fresh
+`IrohLazyRemoteConnection`. Two clients for the shared ALPN therefore
+open two QUIC connections. Sharing one works with no library change:
+`IrohLazyRemoteConnection` is `Clone` and keeps its connection behind an
+`Arc`, so `Client::boxed(conn.clone())` for each service shares it.
+
+The `combined` example shows this with `AppApi::connect` in `app.rs`.
+`PingApi` and `StoreApi` gained `from_connection(impl RemoteConnection)`
+for it. With debug logs on, the server logs one `connection accepted`
+for all `AppApi` requests, and one per client when `PingApi::connect`
+and `StoreApi::connect` target the shared ALPN.
+
+- Possible irpc-iroh addition: document the sharing pattern on
+  `irpc_iroh::client`, or add `irpc_iroh::connection(endpoint, addr, alpn)`
+  that returns the `IrohLazyRemoteConnection` for reuse. Not required.
+
+### Rejected alternative: one flat enum with all requests
+
+`enum AppProtocol { Ping(Ping), Put(Put), Get(Get), List(List) }` with
+`rpc_requests` and `serialize_service` compiles with no changes. The
+hashes match the sub-protocols because they do not depend on `S`. But
+it restates every `#[rpc(..)]` of both protocols (the F6 problem for
+every request), and the server must rebuild each
+`WithChannels<Ping, AppProtocol>` as `WithChannels<Ping, PingProtocol>`
+to forward it. The two protocols no longer live independently.
+
+## Proposals
+
+### P1 (irpc-schema): flatten sub-protocols into a combined stable enum
+
+Status: implemented on `Frando/feat-flatten`, as described below. Tests
+in `tests/smoke.rs` (`mod flatten`) cover the wire format, mixed payload
+and flatten variants, unknown hashes, and duplicate hashes.
+
+Add a trait that the macros implement for every stable enum:
+
+```rust
+pub trait StableEnum: Sized {
+    /// Returns the name, schema, and hash of each variant.
+    fn schemas() -> impl Iterator<Item = (&'static str, &'static Schema, [u8; 32])>;
+
+    /// Deserializes the payload for `hash` from `seq`.
+    ///
+    /// Returns `Ok(None)` and consumes nothing if no variant has `hash`.
+    fn deserialize_payload<'de, A: SeqAccess<'de>>(
+        hash: &[u8; 32],
+        seq: &mut A,
+    ) -> Result<Option<Self>, A::Error>;
+}
+```
+
+The generated `Deserialize` becomes: read the hash, then
+`Self::deserialize_payload(&hash, &mut seq)?.ok_or(unknown)`.
+
+Then allow `#[flatten]` on a variant whose field is itself a stable
+enum:
+
+```rust
+#[serialize_stable]
+enum AppProtocol {
+    #[flatten]
+    Ping(PingProtocol),
+    #[flatten]
+    Store(StoreProtocol),
+}
+```
+
+- `Serialize` for a flatten variant delegates to the inner value. The
+  bytes are identical to what a `PingProtocol` client writes.
+- `deserialize_payload` tries the inner `deserialize_payload` of each
+  flatten variant in turn. It consumes nothing until a hash matches.
+- `schemas()` chains the inner schemas. Duplicate hashes panic on
+  first use, so an ambiguous combination fails loudly.
+
+With `irpc`, the combined enum still needs `Service` and
+`RemoteService`. These are a few lines by hand, or the macro can
+generate them behind the `irpc` feature: `Message` is an enum of the
+inner messages, and `with_remote_channels` delegates to the inner
+protocol. A server then uses the stock `IrohProtocol::new(handler)`
+with a handler that matches on the combined enum and calls the inner
+`remote_handler`s. No irpc change is needed. The combined server gets
+span propagation and 0-RTT from irpc-iroh as usual.
+
+Versioning becomes the same pattern: `enum StoreServer { #[flatten]
+V1(v1::StoreProtocol), #[flatten] V2(v2::StoreProtocol) }`. The v1
+channel types come from the v1 macro, so F6 disappears, and v2 stays
+clean.
+
+What the implementation taught us:
+
+- `serialize_service(S, message = M)` generates `M`, `Service`, and
+  `RemoteService` for an enum with only flattened variants. Both examples
+  then build a `Handler<S>` by hand that matches on `S` and calls the
+  inner `remote_handler`s. `M` exists only to satisfy `Service`, and no
+  example uses it.
+- P1b (possible follow-up): generate the handler combinator as well, for
+  example `AppProtocol::handler(ping: Handler<PingProtocol>, store:
+  Handler<StoreProtocol>) -> Handler<AppProtocol>`. It saves six lines
+  per combined protocol. Parameter names would come from the variant
+  names in snake case.
+- A client for a combined protocol (`Client<AppProtocol>`) cannot send
+  requests, because `Ping: Channels<AppProtocol>` does not hold. That is
+  fine: clients use the inner protocols, possibly over one shared
+  connection (F8).
+
+### P2 (irpc-schema): `#[derive(HasSchema)]`
+
+Fixes F2. Keep the `schema` attribute macro for compatibility.
+
+### P3 (irpc-schema): macro hygiene
+
+Fixes F5. Status: implemented on `Frando/feat-flatten`, with a test that
+puts two stable enums in one module.
+
+### P4 (irpc, optional): re-export `tracing` and `serde` for macro output
+
+Fixes F1. Not needed for P1.
+
+### P5 (irpc, optional): public raw frame read
+
+Only needed if we keep a byte-level `Mux` instead of P1 (see F7).
+
+## Versioning
+
+### What the `versioning` example does now
+
+On `Frando/feat-versioning`, the example has three modules:
+
+- `v1`: the released v1 protocol and client, frozen. It has no server.
+- `v2`: the v2 protocol, actor, and client. It knows nothing about v1.
+- `server`: `StoreServer` flattens `v1::StoreProtocol` and
+  `v2::StoreProtocol`. v2 requests go to the v2 actor. v1 requests go to
+  a small task that translates each one into calls on the public v2 API
+  (`StoreApi::put`, `get`, `list`). Values that are not valid UTF-8 have
+  no v1 form: `Get` returns `None` and `List` skips them.
+
+This removes F6. The v1 channel types come from the v1 macro, the v2
+enum has only v2 requests, and the v1 translation lives in one place and
+uses only the public v2 API.
+
+### Hash lock for released protocols
+
+The v1 module must never change. But a type that v1 uses can change by
+accident, for example a shared `Key` type or a new field in a nested
+struct. The hash of every v1 request then changes, and old clients fail.
+Nothing fails at compile time.
+
+The example records the released v1 hashes in `V1_HASHES` and asserts
+them at startup. In a library, this belongs in a unit test. A possible
+irpc-schema helper:
+
+```rust
+/// Asserts that the schema hashes of `S` match `expected`.
+///
+/// # Panics
+///
+/// Panics with the name and the new hash of each changed variant.
+pub fn assert_schema_hashes<S: StableEnum>(expected: &[(&str, &str)]);
+```
+
+A snapshot file (the pretty-printed schemas plus hashes, checked into
+the repo, compared in a test, and updated on request) would also show
+what changed, not only that something changed.
+
+### F9: an unknown request closes the whole connection
+
+Probe (a throwaway example, not committed): a v2-only server, and one
+connection shared by a v2 client and a v1 client. Sequence: v2 `Put`,
+start a v2 `List`, v1 `Put`, read the `List`, v2 `Get`.
+
+- The v1 `Put` fails on the client with `Oneshot recv error: Io error:
+  failed to read size`. The client cannot tell "the server does not know
+  this request" from a network failure.
+- The server logs `Handling incoming connection ended with error: Serde
+  Deserialization Error` and closes the connection.
+- The open v2 `List` still delivered its item in this run, only because
+  the item was already sent. A longer stream would have been cut.
+- The v2 `Get` after that succeeded only because
+  `IrohLazyRemoteConnection` reconnected (a second `connection accepted`).
+
+The cause is in irpc and irpc-iroh: `read_request_inner` returns an error
+when postcard fails, and `handle_connection` ends on that error. For
+versioning this is the main gap. A new client that talks to an old
+server breaks all other requests on the same connection.
+
+### New client, old server: options
+
+The design above covers the server side: a new server serves old clients. The
+other direction needs the client to learn what the server supports.
+
+#### N1 (irpc, small): reject unknown requests per stream
+
+In `read_request_inner` (irpc `rpc` module and irpc-iroh): when the
+request frame does not deserialize, reset the send stream and stop the
+receive stream with a new error code, for example
+`ERROR_CODE_INVALID_REQUEST = 3`, log a warning, and accept the next
+stream. The connection stays up.
+
+On the client, a response read that fails with a stream reset of that
+code should map to an error the caller can recognize. The server change
+alone is about ten lines per crate and not breaking. For the client
+error there are two ways:
+
+- A new variant such as `RecvError::UnknownRequest`. The irpc 0.17
+  error enums are not `#[non_exhaustive]`, so this is a breaking change.
+- The existing `Io` variant with `io::ErrorKind::Unsupported`. This is
+  not breaking, but callers must inspect the io error kind.
+
+With N1, a client can try v2 and fall back to v1 on `UnknownRequest`,
+and cache the answer per connection. This works against every server
+that has the N1 fix, whatever protocol version it runs.
+
+#### N2 (irpc-schema): ask the server for its schema hashes
+
+A small meta protocol with one request, `ListSchemas`, that returns the
+hashes the server knows. Servers flatten it into their protocol:
+
+```rust
+#[serialize_service(StoreServer, message = StoreServerMessage)]
+enum StoreServer {
+    #[flatten]
+    Meta(irpc_schema::meta::MetaProtocol),
+    #[flatten]
+    V1(v1::StoreProtocol),
+    #[flatten]
+    V2(v2::StoreProtocol),
+}
+```
+
+irpc-schema can serve it generically for any `S: StableEnum`, because
+`S::schemas()` has all hashes. A client asks once per connection and
+then picks the newest request the server knows. This is exact and costs
+one round trip. But servers from before N2 do not know `ListSchemas`, so
+the question itself is an unknown request. Without N1 that closes the
+connection. N2 needs N1 to be safe against old servers.
+
+#### N3 (no library change): ALPN negotiation
+
+iroh lets a client offer several ALPNs
+(`ConnectOptions::with_additional_alpns`), and `Connection::alpn()`
+returns the one the server picked. A v2 server accepts `store/2` and
+`store/1` (the same `StoreServer` handler for both). A v1 server accepts
+only `store/1`. The client offers `store/2` first and learns the newest
+version the server speaks from `conn.alpn()`. Then it builds a v1 or v2
+client with `IrohRemoteConnection::new(conn)`.
+
+This is how HTTP picks h2 or http/1.1, and it works with old servers
+that exist today. It versions whole protocols, not single requests. The
+schema hashes still guard against mismatched types. The client needs a
+downgrade path, a v2 API that runs on a v1 connection, which is the
+mirror of the server-side v1 task. irpc-iroh could help with a
+`connect_negotiated(endpoint, addr, alpns) -> (Vec<u8>, IrohRemoteConnection)`
+helper, but it is not required.
+
+#### Recommendation
+
+- Do N1 in irpc regardless. Closing a connection because of one bad
+  request is wrong even without versioning.
+- For versioning in iroh ecosystem crates, use N3 to pick the protocol
+  version per connection, and flattened stable enums (P1) to serve
+  several versions on one server. The schema hashes turn a version
+  mismatch into a clean error instead of garbage data.
+- N2 is optional. It pays off only for protocols that change often
+  per request and need exact capability checks.
