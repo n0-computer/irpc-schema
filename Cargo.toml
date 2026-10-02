@@ -28,9 +28,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(irpc_schema_docsrs)"] }
 
 [dev-dependencies]
 anyhow = "1"
+bytes = { version = "1", features = ["serde"] }
 derive_more = { version = "2", features = ["from"] }
 hex = "0.4"
+iroh = "1"
 irpc = { git = "https://github.com/n0-computer/irpc", branch = "Frando/feat-handler" }
+n0-future = "0.3"
 testresult = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
