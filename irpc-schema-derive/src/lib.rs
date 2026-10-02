@@ -12,6 +12,9 @@ use syn::{
 #[proc_macro_attribute]
 pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
+    // The field attributes are read below, and must not stay on the output.
+    let mut output = input.clone();
+    strip_field_attrs(&mut output);
     let name = &input.ident;
 
     // Parse the attribute to extract schema type and optional name
@@ -53,7 +56,7 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let schema_impl = impl_has_schema(&input, schema_impl);
     let expanded = quote! {
-        #input
+        #output
 
         #schema_impl
     };
@@ -88,11 +91,63 @@ fn impl_has_schema(
 /// This is the same as `#[schema(Nominal)]`, but as a derive. Use it where
 /// only derives are allowed, for example in `#[wrap(Name, derive(HasSchema))]`
 /// of the irpc `rpc_requests` macro.
-#[proc_macro_derive(HasSchema)]
+///
+/// A field of a type without a schema, for example from another crate, can be
+/// named as an atom with `#[schema(atom = "other_crate::Type")]`.
+#[proc_macro_derive(HasSchema, attributes(schema))]
 pub fn derive_has_schema(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     let schema_impl = generate_nominal_schema(&input.ident, &input.data, None);
     impl_has_schema(&input, schema_impl).into()
+}
+
+/// Returns the schema of a field: the schema of its type, or the atom set by `#[schema(atom = "..")]`.
+fn field_schema(field: &syn::Field) -> proc_macro2::TokenStream {
+    match field_atom(field) {
+        Some(name) => quote! { ::irpc_schema::Schema::Atom(#name.to_string()) },
+        None => {
+            let ty = &field.ty;
+            quote! { <#ty as ::irpc_schema::HasSchema>::schema() }
+        }
+    }
+}
+
+/// Returns the name in a `#[schema(atom = "..")]` attribute on a field.
+///
+/// # Panics
+///
+/// Panics on a `schema` attribute of another form, like the rest of this macro.
+fn field_atom(field: &syn::Field) -> Option<String> {
+    let attr = field
+        .attrs
+        .iter()
+        .find(|attr| attr.path.is_ident("schema"))?;
+    if let Ok(Meta::List(list)) = attr.parse_meta() {
+        if let [syn::NestedMeta::Meta(Meta::NameValue(nv))] =
+            &list.nested.iter().collect::<Vec<_>>()[..]
+        {
+            if let (true, syn::Lit::Str(name)) = (nv.path.is_ident("atom"), &nv.lit) {
+                return Some(name.value());
+            }
+        }
+    }
+    panic!("expected `#[schema(atom = \"..\")]` on a field");
+}
+
+/// Removes the `schema` attributes from the fields of `input`.
+fn strip_field_attrs(input: &mut DeriveInput) {
+    let fields: Vec<&mut syn::Field> = match &mut input.data {
+        Data::Struct(data) => data.fields.iter_mut().collect(),
+        Data::Enum(data) => data
+            .variants
+            .iter_mut()
+            .flat_map(|variant| variant.fields.iter_mut())
+            .collect(),
+        Data::Union(data) => data.fields.named.iter_mut().collect(),
+    };
+    for field in fields {
+        field.attrs.retain(|attr| !attr.path.is_ident("schema"));
+    }
 }
 
 // Generates an Atom schema (just the type name)
@@ -118,9 +173,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .named
                     .iter()
                     .map(|f| {
-                        let ty = &f.ty;
+                        let schema = field_schema(f);
                         quote! {
-                            <#ty as ::irpc_schema::HasSchema>::schema()
+                            #schema
                         }
                     })
                     .collect();
@@ -139,9 +194,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .unnamed
                     .iter()
                     .map(|f| {
-                        let ty = &f.ty;
+                        let schema = field_schema(f);
                         quote! {
-                            <#ty as ::irpc_schema::HasSchema>::schema()
+                            #schema
                         }
                     })
                     .collect();
@@ -169,9 +224,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .named
                             .iter()
                             .map(|f| {
-                                let ty = &f.ty;
+                                let schema = field_schema(f);
                                 quote! {
-                                    <#ty as ::irpc_schema::HasSchema>::schema()
+                                    #schema
                                 }
                             })
                             .collect(),
@@ -179,9 +234,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .unnamed
                             .iter()
                             .map(|f| {
-                                let ty = &f.ty;
+                                let schema = field_schema(f);
                                 quote! {
-                                    <#ty as ::irpc_schema::HasSchema>::schema()
+                                    #schema
                                 }
                             })
                             .collect(),
@@ -226,9 +281,9 @@ fn generate_nominal_schema(
                     .iter()
                     .map(|f| {
                         let field_name = f.ident.as_ref().unwrap().to_string();
-                        let field_type = &f.ty;
+                        let schema = field_schema(f);
                         quote! {
-                            ::irpc_schema::Named(#field_name.to_string(), <#field_type as ::irpc_schema::HasSchema>::schema())
+                            ::irpc_schema::Named(#field_name.to_string(), #schema)
                         }
                     })
                     .collect();
@@ -248,9 +303,9 @@ fn generate_nominal_schema(
                     .unnamed
                     .iter()
                     .map(|f| {
-                        let field_type = &f.ty;
+                        let schema = field_schema(f);
                         quote! {
-                            <#field_type as ::irpc_schema::HasSchema>::schema()
+                            #schema
                         }
                     })
                     .collect();
@@ -284,10 +339,10 @@ fn generate_nominal_schema(
                                 .named
                                 .iter()
                                 .map(|f| {
-                                    let field_type = &f.ty;
+                                    let schema = field_schema(f);
                                     let field_name = f.ident.as_ref().unwrap().to_string();
                                     quote! {
-                                        ::irpc_schema::Named(#field_name.to_string(),<#field_type as ::irpc_schema::HasSchema>::schema())
+                                        ::irpc_schema::Named(#field_name.to_string(),#schema)
                                     }
                                 })
                                 .collect::<Vec<_>>();
@@ -310,9 +365,9 @@ fn generate_nominal_schema(
                                 .unnamed
                                 .iter()
                                 .map(|f| {
-                                    let field_type = &f.ty;
+                                    let schema = field_schema(f);
                                     quote! {
-                                        <#field_type as ::irpc_schema::HasSchema>::schema()
+                                        #schema
                                     }
                                 })
                                 .collect::<Vec<_>>();

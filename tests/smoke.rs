@@ -358,3 +358,42 @@ mod generics_and_common_types {
         );
     }
 }
+
+mod field_atoms {
+    use irpc_schema::{schema, HasSchema, Named, Schema};
+
+    /// Stands in for a type from another crate, without a schema.
+    struct Foreign;
+
+    #[derive(HasSchema)]
+    struct Derived {
+        #[schema(atom = "other::Foreign")]
+        foreign: Foreign,
+        count: u32,
+    }
+
+    #[schema(Nominal)]
+    struct Attributed {
+        #[schema(atom = "other::Foreign")]
+        foreign: Foreign,
+    }
+
+    #[test]
+    fn test_field_atom_replaces_the_schema_of_the_field() {
+        let expected = Schema::named(
+            "Derived",
+            Schema::Struct(vec![
+                Named::new("foreign", Schema::Atom("other::Foreign".to_string())),
+                Named::new("count", u32::schema()),
+            ]),
+        );
+        assert_eq!(Derived::schema(), expected);
+        let Schema::Named(named) = Attributed::schema() else {
+            panic!("a nominal schema is named");
+        };
+        let Schema::Struct(fields) = named.1 else {
+            panic!("a struct with named fields has a struct schema");
+        };
+        assert_eq!(fields[0].1, Schema::Atom("other::Foreign".to_string()));
+    }
+}
