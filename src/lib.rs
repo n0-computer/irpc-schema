@@ -274,6 +274,8 @@ declare_atom!(
     i32,
     i64,
     i128,
+    usize,
+    isize,
     f32,
     f64,
     String,
@@ -351,17 +353,74 @@ impl<A: HasSchema, B: HasSchema> HasSchema for std::result::Result<A, B> {
     }
 }
 
-impl<A: HasSchema, B: HasSchema> HasSchema for (A, B) {
+// Tuples are products of their elements.
+macro_rules! declare_tuple {
+    ($($t:ident),+) => {
+        impl<$($t: HasSchema),+> HasSchema for ($($t,)+) {
+            fn schema() -> Schema {
+                Schema::Product(vec![$($t::schema()),+])
+            }
+        }
+    };
+}
+
+declare_tuple!(A);
+declare_tuple!(A, B);
+declare_tuple!(A, B, C);
+declare_tuple!(A, B, C, D);
+declare_tuple!(A, B, C, D, E);
+declare_tuple!(A, B, C, D, E, F);
+declare_tuple!(A, B, C, D, E, F, G);
+declare_tuple!(A, B, C, D, E, F, G, H);
+declare_tuple!(A, B, C, D, E, F, G, H, I);
+declare_tuple!(A, B, C, D, E, F, G, H, I, J);
+declare_tuple!(A, B, C, D, E, F, G, H, I, J, K);
+declare_tuple!(A, B, C, D, E, F, G, H, I, J, K, L);
+
+/// An array is a product of its elements, like a tuple. postcard writes both
+/// without a length.
+impl<T: HasSchema, const N: usize> HasSchema for [T; N] {
     fn schema() -> Schema {
-        Schema::Product(vec![A::schema(), B::schema()])
+        Schema::Product((0..N).map(|_| T::schema()).collect())
     }
 }
 
-impl<A: HasSchema, B: HasSchema, C: HasSchema> HasSchema for (A, B, C) {
+impl<T: HasSchema> HasSchema for std::collections::VecDeque<T> {
     fn schema() -> Schema {
-        Schema::Product(vec![A::schema(), B::schema(), C::schema()])
+        Schema::Seq(Box::new(T::schema()))
     }
 }
+
+impl<T> HasSchema for std::marker::PhantomData<T> {
+    fn schema() -> Schema {
+        Schema::Unit
+    }
+}
+
+// Std types that the schema identifies by their path.
+macro_rules! declare_path_atom {
+    ($($t:ty => $name:literal),*) => {
+        $(
+            impl HasSchema for $t {
+                fn schema() -> Schema {
+                    Schema::Atom($name.to_string())
+                }
+            }
+        )*
+    };
+}
+
+declare_path_atom!(
+    std::time::Duration => "std::time::Duration",
+    std::time::SystemTime => "std::time::SystemTime",
+    std::path::PathBuf => "std::path::PathBuf",
+    std::net::IpAddr => "std::net::IpAddr",
+    std::net::Ipv4Addr => "std::net::Ipv4Addr",
+    std::net::Ipv6Addr => "std::net::Ipv6Addr",
+    std::net::SocketAddr => "std::net::SocketAddr",
+    std::net::SocketAddrV4 => "std::net::SocketAddrV4",
+    std::net::SocketAddrV6 => "std::net::SocketAddrV6"
+);
 
 impl<K: HasSchema, V: HasSchema> HasSchema for HashMap<K, V> {
     fn schema() -> Schema {

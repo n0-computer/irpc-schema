@@ -154,3 +154,42 @@ fn test_serialize_schema() -> TestResult<()> {
     assert_eq!(v, v_out);
     Ok(())
 }
+
+mod generics_and_common_types {
+    use std::{marker::PhantomData, time::Duration};
+
+    use irpc_schema::{schema, HasSchema, Schema};
+
+    #[schema(Nominal)]
+    struct Wrapper<T> {
+        value: T,
+    }
+
+    #[test]
+    fn test_generic_schema_depends_on_the_type_argument() {
+        assert_ne!(Wrapper::<u32>::schema(), Wrapper::<String>::schema());
+    }
+
+    #[test]
+    fn test_array_has_the_schema_of_a_tuple() {
+        assert_eq!(<[u8; 2]>::schema(), <(u8, u8)>::schema());
+    }
+
+    #[test]
+    fn test_common_types_have_schemas() {
+        assert_eq!(
+            Duration::schema(),
+            Schema::Atom("std::time::Duration".to_string())
+        );
+        assert_eq!(PhantomData::<String>::schema(), Schema::Unit);
+        assert_eq!(
+            <(u8, u16, u32, u64)>::schema(),
+            Schema::Product(vec![
+                u8::schema(),
+                u16::schema(),
+                u32::schema(),
+                u64::schema()
+            ])
+        );
+    }
+}

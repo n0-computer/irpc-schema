@@ -47,17 +47,36 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => panic!("Unsupported schema type"),
     };
 
+    let schema_impl = impl_has_schema(&input, schema_impl);
     let expanded = quote! {
         #input
 
-        impl ::irpc_schema::HasSchema for #name {
+        #schema_impl
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Returns the `HasSchema` impl for `input`, with a `HasSchema` bound on each type parameter.
+fn impl_has_schema(
+    input: &DeriveInput,
+    schema_impl: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let name = &input.ident;
+    let mut generics = input.generics.clone();
+    for param in generics.type_params_mut() {
+        param
+            .bounds
+            .push(syn::parse_quote!(::irpc_schema::HasSchema));
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    quote! {
+        impl #impl_generics ::irpc_schema::HasSchema for #name #ty_generics #where_clause {
             fn schema() -> ::irpc_schema::Schema {
                 #schema_impl
             }
         }
-    };
-
-    TokenStream::from(expanded)
+    }
 }
 
 // Generates an Atom schema (just the type name)
