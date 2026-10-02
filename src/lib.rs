@@ -20,6 +20,12 @@ pub use irpc_schema_derive::serialize_service;
 #[cfg_attr(irpc_schema_docsrs, doc(cfg(feature = "derive")))]
 pub use irpc_schema_derive::{schema, serialize_stable};
 
+#[doc(hidden)]
+pub mod __private {
+    //! Re-exports for the code that the derive macros generate.
+    pub use serde;
+}
+
 /// The schema enum
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Schema {

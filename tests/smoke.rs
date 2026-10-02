@@ -155,6 +155,27 @@ fn test_serialize_schema() -> TestResult<()> {
     Ok(())
 }
 
+mod two_stable_enums_in_one_module {
+    use irpc_schema_derive::serialize_stable;
+
+    #[serialize_stable]
+    enum First {
+        Foo(u32),
+    }
+
+    #[serialize_stable]
+    enum Second {
+        Foo(u32),
+    }
+
+    #[test]
+    fn test_two_stable_enums_in_one_module_have_the_same_hash() {
+        let (_, _, first) = First::schemas().next().unwrap();
+        let (_, _, second) = Second::schemas().next().unwrap();
+        assert_eq!(first, second);
+    }
+}
+
 mod generics_and_common_types {
     use std::{marker::PhantomData, time::Duration};
 
