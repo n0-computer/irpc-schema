@@ -291,6 +291,29 @@ mod flatten {
     }
 }
 
+mod derive {
+    use irpc_schema::HasSchema;
+
+    #[derive(HasSchema)]
+    struct Derived {
+        id: u32,
+        name: String,
+    }
+
+    mod attribute {
+        #[irpc_schema::schema(Nominal)]
+        pub struct Derived {
+            id: u32,
+            name: String,
+        }
+    }
+
+    #[test]
+    fn test_derive_matches_the_nominal_attribute() {
+        assert_eq!(Derived::schema(), attribute::Derived::schema());
+    }
+}
+
 mod generics_and_common_types {
     use std::{marker::PhantomData, time::Duration};
 
@@ -301,9 +324,15 @@ mod generics_and_common_types {
         value: T,
     }
 
+    #[derive(HasSchema)]
+    struct Derived<T> {
+        value: T,
+    }
+
     #[test]
     fn test_generic_schema_depends_on_the_type_argument() {
         assert_ne!(Wrapper::<u32>::schema(), Wrapper::<String>::schema());
+        assert_ne!(Derived::<u32>::schema(), Derived::<u8>::schema());
     }
 
     #[test]

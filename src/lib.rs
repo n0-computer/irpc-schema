@@ -18,7 +18,7 @@ pub struct Named(pub String, pub Schema);
 pub use irpc_schema_derive::serialize_service;
 #[cfg(feature = "derive")]
 #[cfg_attr(irpc_schema_docsrs, doc(cfg(feature = "derive")))]
-pub use irpc_schema_derive::{schema, serialize_stable};
+pub use irpc_schema_derive::{schema, serialize_stable, HasSchema};
 
 #[doc(hidden)]
 pub mod __private {

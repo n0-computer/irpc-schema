@@ -79,6 +79,18 @@ fn impl_has_schema(
     }
 }
 
+/// Derives `HasSchema` with a nominal schema named after the type.
+///
+/// This is the same as `#[schema(Nominal)]`, but as a derive. Use it where
+/// only derives are allowed, for example in `#[wrap(Name, derive(HasSchema))]`
+/// of the irpc `rpc_requests` macro.
+#[proc_macro_derive(HasSchema)]
+pub fn derive_has_schema(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    let schema_impl = generate_nominal_schema(&input.ident, &input.data, None);
+    impl_has_schema(&input, schema_impl).into()
+}
+
 // Generates an Atom schema (just the type name)
 fn generate_atom_schema(
     name: &syn::Ident,
