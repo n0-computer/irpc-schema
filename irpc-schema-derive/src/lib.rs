@@ -371,7 +371,7 @@ fn generate_nominal_schema(
 #[proc_macro_attribute]
 pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemEnum);
-    stable_enum(input, |field_type| {
+    stable_enum(input, None, |field_type| {
         quote! { <#field_type as ::irpc_schema::HasSchema>::schema() }
     })
     .unwrap_or_else(syn::Error::into_compile_error)
@@ -409,10 +409,64 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
     let channels = args.remove("channels");
     let input = parse_macro_input!(item as ItemEnum);
     let channels = channels.unwrap_or_else(|| input.ident.clone());
-    stable_enum(input, |field_type| {
+    stable_enum(input, None, |field_type| {
         quote! { <#field_type as ::irpc_schema::ChannelsSchema<#channels>>::schema() }
     })
     .unwrap_or_else(syn::Error::into_compile_error)
+    .into()
+}
+
+/// Merges several irpc services into one.
+///
+/// Each variant holds the protocol enum of a service that uses
+/// `serialize_service`. The merged enum accepts the requests of each service, in
+/// the wire format of their own clients. If several services know a schema
+/// hash, the first variant gets the request.
+///
+/// The macro implements serde and `StableEnum` for the enum, and generates the
+/// message enum given by `message`, with one variant per inner message enum. It
+/// implements `irpc::Service` and `irpc::rpc::RemoteService` for the enum.
+///
+/// With `handler = Name`, the macro also generates a struct with one
+/// `irpc::rpc::Handler` per service, in a field named after the variant in snake
+/// case. The struct converts into a handler for the merged enum, which passes
+/// each request to the handler of its service.
+///
+/// ```rust,ignore
+/// #[merge_services(message = AppMessage, handler = AppHandler)]
+/// #[derive(Debug)]
+/// enum AppProtocol {
+///     Ping(PingProtocol),
+///     Store(StoreProtocol),
+/// }
+///
+/// let handler = AppHandler {
+///     ping: ping_local_sender.into(),
+///     store: store_handler,
+/// };
+/// let protocol = IrohProtocol::new(handler);
+/// ```
+#[proc_macro_attribute]
+pub fn merge_services(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let parser = |input: ParseStream| parse_args(input, &["message", "handler"]);
+    let mut args = parse_macro_input!(attr with parser);
+    let input = parse_macro_input!(item as ItemEnum);
+    let Some(message) = args.remove("message") else {
+        return syn::Error::new_spanned(&input.ident, "expected `message = Name`")
+            .into_compile_error()
+            .into();
+    };
+    let handler = args
+        .remove("handler")
+        .map(|handler| handler_impl(&input, &handler));
+    let merged = stable_enum(input, Some(message), |_| {
+        unreachable!("every variant is flattened")
+    })
+    .unwrap_or_else(syn::Error::into_compile_error);
+    quote! {
+        #merged
+        #handler
+    }
     .into()
 }
 
@@ -435,10 +489,89 @@ fn parse_args(input: ParseStream, keys: &[&str]) -> syn::Result<BTreeMap<String,
     Ok(args)
 }
 
+/// Generates the handler struct of a merged service, and its conversion into a handler.
+///
+/// Variants with another shape than one unnamed field are skipped here, because
+/// `stable_enum` reports them.
+fn handler_impl(input: &ItemEnum, handler: &syn::Ident) -> proc_macro2::TokenStream {
+    let enum_name = &input.ident;
+    let vis = &input.vis;
+    let irpc = quote! { ::irpc_schema::__private::irpc };
+    let mut variant_names = Vec::new();
+    let mut field_names = Vec::new();
+    let mut field_types = Vec::new();
+    let mut field_docs = Vec::new();
+    for variant in &input.variants {
+        let Fields::Unnamed(fields) = &variant.fields else {
+            continue;
+        };
+        let [field] = fields.unnamed.iter().collect::<Vec<_>>()[..] else {
+            continue;
+        };
+        let name = snake_case(&variant.ident.to_string());
+        let mut field_name = syn::parse_str::<syn::Ident>(&name)
+            .unwrap_or_else(|_| syn::Ident::new_raw(&name, variant.ident.span()));
+        field_name.set_span(variant.ident.span());
+        variant_names.push(&variant.ident);
+        field_names.push(field_name);
+        field_types.push(&field.ty);
+        field_docs.push(format!("Handles the requests of `{}`.", variant.ident));
+    }
+    let doc = format!("One handler per service of [`{enum_name}`].");
+    quote! {
+        #[doc = #doc]
+        ///
+        /// Converts into a handler for the merged enum, which passes each request
+        /// to the handler of its service.
+        #[derive(Debug, Clone)]
+        #vis struct #handler {
+            #(
+                #[doc = #field_docs]
+                pub #field_names: #irpc::rpc::Handler<#field_types>,
+            )*
+        }
+
+        impl ::std::convert::From<#handler> for #irpc::rpc::Handler<#enum_name> {
+            fn from(handler: #handler) -> Self {
+                #irpc::rpc::Handler::raw(move |msg, rx, tx| {
+                    let handler = handler.clone();
+                    async move {
+                        match msg {
+                            #(
+                                #enum_name::#variant_names(msg) => {
+                                    handler.#field_names.call(msg, rx, tx).await
+                                }
+                            )*
+                        }
+                    }
+                })
+            }
+        }
+    }
+}
+
+/// Converts a variant name like `KvStore` into a field name like `kv_store`.
+fn snake_case(name: &str) -> String {
+    let mut out = String::new();
+    for (index, c) in name.chars().enumerate() {
+        if c.is_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Generates the serde impls, the `StableEnum` impl, and the `schemas` function for a stable enum.
 ///
 /// `schema_of` returns an expression that evaluates to the schema of a
-/// variant with the given field type.
+/// variant with the given field type. If `merge` is set, every variant is
+/// flattened, and the output also contains the message enum with that name
+/// and the irpc service impls.
 ///
 /// All helper items live in an anonymous `const` block, so several stable
 /// enums can share a module. Serde is reached through a re-export in
@@ -446,6 +579,7 @@ fn parse_args(input: ParseStream, keys: &[&str]) -> syn::Result<BTreeMap<String,
 /// under that name.
 fn stable_enum(
     mut input: ItemEnum,
+    merge: Option<syn::Ident>,
     schema_of: impl Fn(&syn::Type) -> proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let enum_name = &input.ident;
@@ -460,7 +594,7 @@ fn stable_enum(
     for variant in &mut input.variants {
         let attr_count = variant.attrs.len();
         variant.attrs.retain(|attr| !attr.path.is_ident("flatten"));
-        let flatten = variant.attrs.len() != attr_count;
+        let flatten = merge.is_some() || variant.attrs.len() != attr_count;
         let ty = match &variant.fields {
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => fields.unnamed[0].ty.clone(),
             _ => {
@@ -530,8 +664,15 @@ fn stable_enum(
         }
     });
 
+    let service_impls = match merge {
+        None => quote! {},
+        Some(message) => service_impls(&input, &message, &flatten_names, &flatten_types),
+    };
+
     Ok(quote! {
         #input
+
+        #service_impls
 
         const _: () = {
             use ::irpc_schema::__private::serde;
@@ -673,4 +814,52 @@ fn stable_enum(
             }
         };
     })
+}
+
+/// Generates the message enum and the irpc service impls for a merged service.
+fn service_impls(
+    input: &ItemEnum,
+    message: &syn::Ident,
+    flatten_names: &[syn::Ident],
+    flatten_types: &[syn::Type],
+) -> proc_macro2::TokenStream {
+    let enum_name = &input.ident;
+    let vis = &input.vis;
+    let irpc = quote! { ::irpc_schema::__private::irpc };
+    let doc = format!("Message enum for [`{enum_name}`].");
+    quote! {
+        #[doc = #doc]
+        #[derive(Debug)]
+        #vis enum #message {
+            #(#flatten_names(<#flatten_types as #irpc::Service>::Message)),*
+        }
+
+        #(
+            impl ::std::convert::From<<#flatten_types as #irpc::Service>::Message> for #message {
+                fn from(value: <#flatten_types as #irpc::Service>::Message) -> Self {
+                    Self::#flatten_names(value)
+                }
+            }
+        )*
+
+        impl #irpc::Service for #enum_name {
+            type Message = #message;
+        }
+
+        impl #irpc::rpc::RemoteService for #enum_name {
+            fn with_remote_channels(
+                self,
+                rx: #irpc::__macro_exports::RecvStream,
+                tx: #irpc::__macro_exports::SendStream,
+            ) -> Self::Message {
+                match self {
+                    #(
+                        Self::#flatten_names(inner) => #message::#flatten_names(
+                            <#flatten_types as #irpc::rpc::RemoteService>::with_remote_channels(inner, rx, tx),
+                        ),
+                    )*
+                }
+            }
+        }
+    }
 }

@@ -15,7 +15,7 @@ pub struct Named(pub String, pub Schema);
     irpc_schema_docsrs,
     doc(cfg(all(feature = "derive", feature = "irpc")))
 )]
-pub use irpc_schema_derive::serialize_service;
+pub use irpc_schema_derive::{merge_services, serialize_service};
 #[cfg(feature = "derive")]
 #[cfg_attr(irpc_schema_docsrs, doc(cfg(feature = "derive")))]
 pub use irpc_schema_derive::{schema, serialize_stable, HasSchema};
@@ -23,6 +23,8 @@ pub use irpc_schema_derive::{schema, serialize_stable, HasSchema};
 #[doc(hidden)]
 pub mod __private {
     //! Re-exports for the code that the derive macros generate.
+    #[cfg(feature = "irpc")]
+    pub use irpc;
     pub use serde;
 }
 
@@ -256,9 +258,9 @@ pub trait HasSchema {
 
 /// An enum that serializes each variant as a schema hash followed by the payload.
 ///
-/// The `serialize_stable` and `serialize_service` macros implement this
-/// trait. A variant marked `#[flatten]` holds another stable enum and
-/// serializes exactly like it.
+/// The `serialize_stable`, `serialize_service`, and `merge_services` macros
+/// implement this trait. A variant marked `#[flatten]` holds another stable
+/// enum and serializes exactly like it.
 pub trait StableEnum: Sized {
     /// Returns the name, schema, and schema hash of each variant.
     ///
