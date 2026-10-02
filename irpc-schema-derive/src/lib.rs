@@ -1,8 +1,12 @@
 extern crate proc_macro;
 
+use std::collections::BTreeMap;
+
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, ItemEnum, Meta};
+use syn::{
+    parse::ParseStream, parse_macro_input, Data, DeriveInput, Fields, ItemEnum, Meta, Token,
+};
 
 // The attribute macro for schema generation
 #[proc_macro_attribute]
@@ -383,23 +387,52 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// just like a change to the message type itself.
 ///
 /// Usage:
-/// ```rust
-/// #[serialize_service(MyService)]
-/// enum MyServiceProto {}
+/// ```rust,ignore
+/// #[rpc_requests(message = MyServiceMessage)]
+/// #[serialize_service]
+/// enum MyServiceProto {
+///     #[rpc(tx = oneshot::Sender<u64>)]
+///     Get(GetRequest),
+/// }
 /// ```
 ///
 /// This macro requires that `irpc::Channels` is implemented for the given service type
 /// for each variant of the enum. It also requires that HasSchema is implemented for
 /// all channlels payload types.
+///
+/// The service type is the enum itself, as with `rpc_requests`. If the `Channels`
+/// impls are for another type, name it with `#[serialize_service(channels = MyService)]`.
 #[proc_macro_attribute]
 pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let service = parse_macro_input!(attr as syn::Ident);
+    let parser = |input: ParseStream| parse_args(input, &["channels"]);
+    let mut args = parse_macro_input!(attr with parser);
+    let channels = args.remove("channels");
     let input = parse_macro_input!(item as ItemEnum);
+    let channels = channels.unwrap_or_else(|| input.ident.clone());
     stable_enum(input, |field_type| {
-        quote! { <#field_type as ::irpc_schema::ChannelsSchema<#service>>::schema() }
+        quote! { <#field_type as ::irpc_schema::ChannelsSchema<#channels>>::schema() }
     })
     .unwrap_or_else(syn::Error::into_compile_error)
     .into()
+}
+
+/// Parses arguments of the form `key = Ident`, where each key is one of `keys`.
+fn parse_args(input: ParseStream, keys: &[&str]) -> syn::Result<BTreeMap<String, syn::Ident>> {
+    let mut args = BTreeMap::new();
+    while !input.is_empty() {
+        let key: syn::Ident = input.parse()?;
+        if !keys.iter().any(|name| key == name) {
+            let expected: Vec<_> = keys.iter().map(|name| format!("`{name}`")).collect();
+            let message = format!("expected {}", expected.join(" or "));
+            return Err(syn::Error::new(key.span(), message));
+        }
+        input.parse::<Token![=]>()?;
+        args.insert(key.to_string(), input.parse()?);
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+        }
+    }
+    Ok(args)
 }
 
 /// Generates the serde impls, the `StableEnum` impl, and the `schemas` function for a stable enum.

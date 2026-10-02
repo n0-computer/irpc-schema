@@ -30,7 +30,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(irpc_schema_docsrs)"] }
 anyhow = "1"
 derive_more = { version = "2", features = ["from"] }
 hex = "0.4"
+irpc = { git = "https://github.com/n0-computer/irpc", branch = "Frando/feat-handler" }
 testresult = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 derive = ["dep:irpc-schema-derive"]

@@ -37,7 +37,7 @@ mod v1 {
         pub value: String,
     }
 
-    #[serialize_service(MyService)]
+    #[serialize_service(channels = MyService)]
     #[derive(Debug, PartialEq, Eq)]
     pub enum Proto {
         Get(GetRequest),
@@ -71,7 +71,7 @@ mod v2 {
         pub value: Option<String>,
     }
 
-    #[serialize_service(MyService)]
+    #[serialize_service(channels = MyService)]
     #[derive(Debug, PartialEq, Eq)]
     pub enum Proto {
         Get(GetRequest),
