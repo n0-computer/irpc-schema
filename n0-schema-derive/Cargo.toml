@@ -1,7 +1,7 @@
 [package]
-name = "irpc-schema-derive"
+name = "n0-schema-derive"
 version = "0.1.0"
-description = "derive macro for irpc-schema"
+description = "derive macro for n0-schema"
 edition = "2021"
 authors = ["rklaehn <rklaehn@protonmail.com>"]
 license = "MIT OR Apache-2.0"

@@ -50,8 +50,8 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #input
 
-        impl ::irpc_schema::HasSchema for #name {
-            fn schema() -> ::irpc_schema::Schema {
+        impl ::n0_schema::HasSchema for #name {
+            fn schema() -> ::n0_schema::Schema {
                 #schema_impl
             }
         }
@@ -70,7 +70,7 @@ fn generate_atom_schema(
         None => name.to_string(),
     };
     quote! {
-        ::irpc_schema::Schema::Atom(#type_name.to_string())
+        ::n0_schema::Schema::Atom(#type_name.to_string())
     }
 }
 
@@ -85,17 +85,17 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .map(|f| {
                         let ty = &f.ty;
                         quote! {
-                            <#ty as ::irpc_schema::HasSchema>::schema()
+                            <#ty as ::n0_schema::HasSchema>::schema()
                         }
                     })
                     .collect();
                 if types.is_empty() {
                     quote! {
-                        ::irpc_schema::Schema::Unit
+                        ::n0_schema::Schema::Unit
                     }
                 } else {
                     quote! {
-                        ::irpc_schema::Schema::Product(vec![#(#types),*])
+                        ::n0_schema::Schema::Product(vec![#(#types),*])
                     }
                 }
             }
@@ -106,22 +106,22 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .map(|f| {
                         let ty = &f.ty;
                         quote! {
-                            <#ty as ::irpc_schema::HasSchema>::schema()
+                            <#ty as ::n0_schema::HasSchema>::schema()
                         }
                     })
                     .collect();
                 if types.is_empty() {
                     quote! {
-                        ::irpc_schema::Schema::Unit
+                        ::n0_schema::Schema::Unit
                     }
                 } else {
                     quote! {
-                        ::irpc_schema::Schema::Product(vec![#(#types),*])
+                        ::n0_schema::Schema::Product(vec![#(#types),*])
                     }
                 }
             }
             Fields::Unit => quote! {
-                ::irpc_schema::Schema::Unit
+                ::n0_schema::Schema::Unit
             },
         },
         Data::Enum(data_enum) => {
@@ -136,7 +136,7 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .map(|f| {
                                 let ty = &f.ty;
                                 quote! {
-                                    <#ty as ::irpc_schema::HasSchema>::schema()
+                                    <#ty as ::n0_schema::HasSchema>::schema()
                                 }
                             })
                             .collect(),
@@ -146,7 +146,7 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .map(|f| {
                                 let ty = &f.ty;
                                 quote! {
-                                    <#ty as ::irpc_schema::HasSchema>::schema()
+                                    <#ty as ::n0_schema::HasSchema>::schema()
                                 }
                             })
                             .collect(),
@@ -154,22 +154,22 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     };
                     if variant_fields.is_empty() {
                         quote! {
-                            ::irpc_schema::Schema::Unit
+                            ::n0_schema::Schema::Unit
                         }
                     } else {
                         quote! {
-                            ::irpc_schema::Schema::Product(vec![#(#variant_fields),*])
+                            ::n0_schema::Schema::Product(vec![#(#variant_fields),*])
                         }
                     }
                 })
                 .collect();
             if variant_schemas.is_empty() {
                 return quote! {
-                    ::irpc_schema::Schema::Bottom
+                    ::n0_schema::Schema::Bottom
                 };
             }
             quote! {
-                ::irpc_schema::Schema::Sum(vec![#(#variant_schemas),*])
+                ::n0_schema::Schema::Sum(vec![#(#variant_schemas),*])
             }
         }
         _ => panic!("Unsupported type for Structural schema"),
@@ -193,18 +193,18 @@ fn generate_nominal_schema(
                         let field_name = f.ident.as_ref().unwrap().to_string();
                         let field_type = &f.ty;
                         quote! {
-                            ::irpc_schema::Named(#field_name.to_string(), <#field_type as ::irpc_schema::HasSchema>::schema())
+                            ::n0_schema::Named(#field_name.to_string(), <#field_type as ::n0_schema::HasSchema>::schema())
                         }
                     })
                     .collect();
                 let schema = if field_schemas.is_empty() {
-                    quote! { ::irpc_schema::Schema::Unit }
+                    quote! { ::n0_schema::Schema::Unit }
                 } else {
-                    quote! { ::irpc_schema::Schema::Struct(vec![#(#field_schemas),*]) }
+                    quote! { ::n0_schema::Schema::Struct(vec![#(#field_schemas),*]) }
                 };
                 quote! {
-                    ::irpc_schema::Schema::Named(
-                        Box::new(::irpc_schema::Named(#name_text.to_string(), #schema))
+                    ::n0_schema::Schema::Named(
+                        Box::new(::n0_schema::Named(#name_text.to_string(), #schema))
                     )
                 }
             }
@@ -215,24 +215,24 @@ fn generate_nominal_schema(
                     .map(|f| {
                         let field_type = &f.ty;
                         quote! {
-                            <#field_type as ::irpc_schema::HasSchema>::schema()
+                            <#field_type as ::n0_schema::HasSchema>::schema()
                         }
                     })
                     .collect();
                 let schema = if field_schemas.is_empty() {
-                    quote! { ::irpc_schema::Schema::Unit }
+                    quote! { ::n0_schema::Schema::Unit }
                 } else {
-                    quote! { ::irpc_schema::Schema::Product(vec![#(#field_schemas),*]) }
+                    quote! { ::n0_schema::Schema::Product(vec![#(#field_schemas),*]) }
                 };
                 quote! {
-                    ::irpc_schema::Schema::Named(
-                        Box::new(::irpc_schema::Named(#name_text.to_string(), #schema))
+                    ::n0_schema::Schema::Named(
+                        Box::new(::n0_schema::Named(#name_text.to_string(), #schema))
                     )
                 }
             }
             Fields::Unit => quote! {
-                ::irpc_schema::Schema::Named(
-                    Box::new(::irpc_schema::Named(#name_text.to_string(), ::irpc_schema::Schema::Unit))
+                ::n0_schema::Schema::Named(
+                    Box::new(::n0_schema::Named(#name_text.to_string(), ::n0_schema::Schema::Unit))
                 )
             },
         },
@@ -252,19 +252,19 @@ fn generate_nominal_schema(
                                     let field_type = &f.ty;
                                     let field_name = f.ident.as_ref().unwrap().to_string();
                                     quote! {
-                                        ::irpc_schema::Named(#field_name.to_string(),<#field_type as ::irpc_schema::HasSchema>::schema())
+                                        ::n0_schema::Named(#field_name.to_string(),<#field_type as ::n0_schema::HasSchema>::schema())
                                     }
                                 })
                                 .collect::<Vec<_>>();
                             let schema_type = if named.is_empty() {
-                                quote! { ::irpc_schema::Schema::Unit }
+                                quote! { ::n0_schema::Schema::Unit }
                             } else if named.len() == 1 {
-                                quote! { ::irpc_schema::Schema::Struct(vec![#(#named),*]) }
+                                quote! { ::n0_schema::Schema::Struct(vec![#(#named),*]) }
                             } else {
-                                quote! { ::irpc_schema::Schema::Enum(vec![#(#named),*]) }
+                                quote! { ::n0_schema::Schema::Enum(vec![#(#named),*]) }
                             };
                             quote! {
-                                ::irpc_schema::Named(
+                                ::n0_schema::Named(
                                     #variant_name_text.to_string(),
                                     #schema_type
                                 )
@@ -277,19 +277,19 @@ fn generate_nominal_schema(
                                 .map(|f| {
                                     let field_type = &f.ty;
                                     quote! {
-                                        <#field_type as ::irpc_schema::HasSchema>::schema()
+                                        <#field_type as ::n0_schema::HasSchema>::schema()
                                     }
                                 })
                                 .collect::<Vec<_>>();
                             let schema_type = if unnamed.is_empty() {
-                                quote! { ::irpc_schema::Schema::Unit }
+                                quote! { ::n0_schema::Schema::Unit }
                             } else if unnamed.len() == 1 {
-                                quote! { ::irpc_schema::Schema::Product(vec![#(#unnamed),*]) }
+                                quote! { ::n0_schema::Schema::Product(vec![#(#unnamed),*]) }
                             } else {
-                                quote! { ::irpc_schema::Schema::Sum(vec![#(#unnamed),*]) }
+                                quote! { ::n0_schema::Schema::Sum(vec![#(#unnamed),*]) }
                             };
                             quote! {
-                                ::irpc_schema::Named(
+                                ::n0_schema::Named(
                                     #variant_name_text.to_string(),
                                     #schema_type
                                 )
@@ -297,9 +297,9 @@ fn generate_nominal_schema(
                         }
                         Fields::Unit => {
                             quote! {
-                                ::irpc_schema::Named(
+                                ::n0_schema::Named(
                                     #variant_name_text.to_string(),
-                                    ::irpc_schema::Schema::Unit
+                                    ::n0_schema::Schema::Unit
                                 )
                             }
                         }
@@ -308,15 +308,15 @@ fn generate_nominal_schema(
                 .collect::<Vec<_>>();
 
             let schema = if variants.is_empty() {
-                quote! { ::irpc_schema::Schema::Bottom }
+                quote! { ::n0_schema::Schema::Bottom }
             } else if variants.len() == 1 {
-                quote! { ::irpc_schema::Schema::Struct(vec![#(#variants),*]) }
+                quote! { ::n0_schema::Schema::Struct(vec![#(#variants),*]) }
             } else {
-                quote! { ::irpc_schema::Schema::Enum(vec![#(#variants),*]) }
+                quote! { ::n0_schema::Schema::Enum(vec![#(#variants),*]) }
             };
             quote! {
-                ::irpc_schema::Schema::Named(
-                    Box::new(::irpc_schema::Named(#name_text.to_string(), #schema))
+                ::n0_schema::Schema::Named(
+                    Box::new(::n0_schema::Named(#name_text.to_string(), #schema))
                 )
             }
         }
@@ -376,7 +376,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Define fields for our SchemaHashes struct
     let schema_struct_fields = variant_names.iter().map(|variant_name| {
-        quote! { pub #variant_name: ::irpc_schema::SchemaAndHash }
+        quote! { pub #variant_name: ::n0_schema::SchemaAndHash }
     });
 
     // Generate initialization for our SchemaHashes struct
@@ -386,7 +386,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .zip(field_types.iter())
             .map(|(variant_name, field_type)| {
                 quote! {
-                    #variant_name: ::irpc_schema::SchemaAndHash::from(<#field_type as ::irpc_schema::HasSchema>::schema())
+                    #variant_name: ::n0_schema::SchemaAndHash::from(<#field_type as ::n0_schema::HasSchema>::schema())
                 }
             });
 
@@ -458,7 +458,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #enum_name {
-            pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::irpc_schema::Schema, [u8; 32])> {
+            pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
                 let schema_struct_value = #schema_struct_name::get();
                 [#(#schema_struct_to_tuples),*].into_iter()
             }
@@ -591,7 +591,7 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Define fields for our SchemaHashes struct
     let schema_struct_fields = variant_names.iter().map(|variant_name| {
-        quote! { pub #variant_name: ::irpc_schema::SchemaAndHash }
+        quote! { pub #variant_name: ::n0_schema::SchemaAndHash }
     });
 
     // Generate initialization for our SchemaHashes struct
@@ -601,7 +601,7 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
             .zip(field_types.iter())
             .map(|(variant_name, field_type)| {
                 quote! {
-                    #variant_name: ::irpc_schema::SchemaAndHash::from(<#field_type as ::irpc_schema::ChannelsSchema<#service>>::schema())
+                    #variant_name: ::n0_schema::SchemaAndHash::from(<#field_type as ::n0_schema::ChannelsSchema<#service>>::schema())
                 }
             });
 
@@ -672,7 +672,7 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #enum_name {
-            pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::irpc_schema::Schema, [u8; 32])> {
+            pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
                 let schema_struct_value = #schema_struct_name::get();
                 [#(#schema_struct_to_tuples),*].into_iter()
             }

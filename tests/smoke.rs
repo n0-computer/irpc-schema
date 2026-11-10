@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use std::collections::{BTreeMap, BTreeSet};
 
-use irpc_schema::{HasSchema, Named, Schema};
-use irpc_schema_derive::{schema, serialize_stable};
+use n0_schema::{HasSchema, Named, Schema};
+use n0_schema_derive::{schema, serialize_stable};
 use testresult::TestResult;
 
 #[schema(Nominal)]
