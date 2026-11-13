@@ -533,7 +533,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// just like a change to the message type itself.
 ///
 /// Usage:
-/// ```rust
+/// ```ignore
 /// #[serialize_service(MyService)]
 /// enum MyServiceProto {}
 /// ```

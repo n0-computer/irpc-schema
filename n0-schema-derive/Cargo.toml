@@ -16,4 +16,4 @@ quote = "1"
 proc-macro2 = "1"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
-postcard = { version = "1", features = ["alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
