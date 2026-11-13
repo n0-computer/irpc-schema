@@ -22,17 +22,19 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
             let mut explicit_name = None;
 
             // Parse the nested meta items
-            for nested in list.nested.iter() {
-                match nested {
-                    syn::NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("name") => {
-                        if let syn::Lit::Str(lit_str) = &nv.lit {
-                            explicit_name = Some(lit_str.value());
-                        } else {
-                            panic!("Expected string literal for name parameter");
-                        }
-                    }
-                    _ => panic!("Unsupported parameter in schema attribute"),
+            let parsed = list.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    let value: syn::LitStr = meta.value()?.parse().map_err(|err| {
+                        syn::Error::new(err.span(), "Expected string literal for name parameter")
+                    })?;
+                    explicit_name = Some(value.value());
+                    Ok(())
+                } else {
+                    Err(meta.error("Unsupported parameter in schema attribute"))
                 }
+            });
+            if let Err(err) = parsed {
+                return err.to_compile_error().into();
             }
 
             (schema_type, explicit_name)
