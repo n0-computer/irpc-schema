@@ -278,6 +278,40 @@ declare_atom!(
     &[u8]
 );
 
+// Declare Schema for atom types from other modules or crates, with a short name
+macro_rules! declare_named_atom {
+    ($($t:ty => $name:literal),* $(,)?) => {
+        $(
+            impl HasSchema for $t {
+                fn schema() -> Schema {
+                    Schema::Atom($name.to_string())
+                }
+            }
+        )*
+    };
+}
+
+declare_named_atom!(
+    std::path::PathBuf => "PathBuf",
+    std::time::Duration => "Duration",
+    std::net::IpAddr => "IpAddr",
+    std::net::Ipv4Addr => "Ipv4Addr",
+    std::net::Ipv6Addr => "Ipv6Addr",
+    std::net::SocketAddr => "SocketAddr",
+    std::net::SocketAddrV4 => "SocketAddrV4",
+    std::net::SocketAddrV6 => "SocketAddrV6",
+);
+
+#[cfg(feature = "url")]
+declare_named_atom!(url::Url => "Url");
+
+#[cfg(feature = "iroh-base")]
+declare_named_atom!(
+    iroh_base::PublicKey => "PublicKey",
+    iroh_base::EndpointAddr => "EndpointAddr",
+    iroh_base::RelayUrl => "RelayUrl",
+);
+
 #[cfg(feature = "bytes")]
 impl HasSchema for bytes::Bytes {
     fn schema() -> Schema {

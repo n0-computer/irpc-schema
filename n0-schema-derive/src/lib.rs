@@ -49,8 +49,10 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => panic!("Unsupported schema type"),
     };
 
+    let mut output = input.clone();
+    strip_field_attributes(&mut output.data);
     let expanded = quote! {
-        #input
+        #output
 
         impl ::n0_schema::HasSchema for #name {
             fn schema() -> ::n0_schema::Schema {
@@ -60,6 +62,50 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+/// Returns the schema of a field.
+///
+/// `#[schema(atom = "Name")]` on the field makes its schema the atom `Name`,
+/// for a field type that does not implement `HasSchema`, such as a type from
+/// another crate. Otherwise the schema comes from the type's `HasSchema`.
+fn field_schema(field: &syn::Field) -> proc_macro2::TokenStream {
+    let mut atom = None;
+    for attr in field.attrs.iter().filter(|a| a.path().is_ident("schema")) {
+        let parsed = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("atom") {
+                let value: syn::LitStr = meta.value()?.parse()?;
+                atom = Some(value.value());
+                Ok(())
+            } else {
+                Err(meta.error("expected `atom = \"Name\"`"))
+            }
+        });
+        if let Err(err) = parsed {
+            return err.to_compile_error();
+        }
+    }
+    match atom {
+        Some(name) => quote! { ::n0_schema::Schema::Atom(#name.to_string()) },
+        None => {
+            let ty = &field.ty;
+            quote! { <#ty as ::n0_schema::HasSchema>::schema() }
+        }
+    }
+}
+
+/// Removes `#[schema(...)]` from all fields, since the compiler does not know it there.
+fn strip_field_attributes(data: &mut syn::Data) {
+    let strip = |fields: &mut Fields| {
+        for field in fields.iter_mut() {
+            field.attrs.retain(|a| !a.path().is_ident("schema"));
+        }
+    };
+    match data {
+        Data::Struct(data) => strip(&mut data.fields),
+        Data::Enum(data) => data.variants.iter_mut().for_each(|v| strip(&mut v.fields)),
+        Data::Union(_) => {}
+    }
 }
 
 // Generates an Atom schema (just the type name)
@@ -85,9 +131,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .named
                     .iter()
                     .map(|f| {
-                        let ty = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            <#ty as ::n0_schema::HasSchema>::schema()
+                            #field_schema
                         }
                     })
                     .collect();
@@ -106,9 +152,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .unnamed
                     .iter()
                     .map(|f| {
-                        let ty = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            <#ty as ::n0_schema::HasSchema>::schema()
+                            #field_schema
                         }
                     })
                     .collect();
@@ -136,9 +182,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .named
                             .iter()
                             .map(|f| {
-                                let ty = &f.ty;
+                                let field_schema = field_schema(f);
                                 quote! {
-                                    <#ty as ::n0_schema::HasSchema>::schema()
+                                    #field_schema
                                 }
                             })
                             .collect(),
@@ -146,9 +192,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .unnamed
                             .iter()
                             .map(|f| {
-                                let ty = &f.ty;
+                                let field_schema = field_schema(f);
                                 quote! {
-                                    <#ty as ::n0_schema::HasSchema>::schema()
+                                    #field_schema
                                 }
                             })
                             .collect(),
@@ -193,9 +239,9 @@ fn generate_nominal_schema(
                     .iter()
                     .map(|f| {
                         let field_name = f.ident.as_ref().unwrap().to_string();
-                        let field_type = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            ::n0_schema::Named(#field_name.to_string(), <#field_type as ::n0_schema::HasSchema>::schema())
+                            ::n0_schema::Named(#field_name.to_string(), #field_schema)
                         }
                     })
                     .collect();
@@ -215,9 +261,9 @@ fn generate_nominal_schema(
                     .unnamed
                     .iter()
                     .map(|f| {
-                        let field_type = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            <#field_type as ::n0_schema::HasSchema>::schema()
+                            #field_schema
                         }
                     })
                     .collect();
@@ -251,10 +297,10 @@ fn generate_nominal_schema(
                                 .named
                                 .iter()
                                 .map(|f| {
-                                    let field_type = &f.ty;
+                                    let field_schema = field_schema(f);
                                     let field_name = f.ident.as_ref().unwrap().to_string();
                                     quote! {
-                                        ::n0_schema::Named(#field_name.to_string(),<#field_type as ::n0_schema::HasSchema>::schema())
+                                        ::n0_schema::Named(#field_name.to_string(),#field_schema)
                                     }
                                 })
                                 .collect::<Vec<_>>();
@@ -277,9 +323,9 @@ fn generate_nominal_schema(
                                 .unnamed
                                 .iter()
                                 .map(|f| {
-                                    let field_type = &f.ty;
+                                    let field_schema = field_schema(f);
                                     quote! {
-                                        <#field_type as ::n0_schema::HasSchema>::schema()
+                                        #field_schema
                                     }
                                 })
                                 .collect::<Vec<_>>();

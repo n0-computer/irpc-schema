@@ -154,3 +154,93 @@ fn test_serialize_schema() -> TestResult<()> {
     assert_eq!(v, v_out);
     Ok(())
 }
+
+/// A type from "another crate" without `HasSchema`.
+#[derive(Debug)]
+struct Foreign([u8; 32]);
+
+#[schema(Nominal)]
+struct WithForeignField {
+    #[schema(atom = "Foreign")]
+    foreign: Foreign,
+    count: u64,
+}
+
+#[schema(Nominal)]
+struct WithForeignTuple(#[schema(atom = "Foreign")] Foreign, u64);
+
+#[schema(Nominal)]
+enum WithForeignVariants {
+    Record {
+        #[schema(atom = "Foreign")]
+        foreign: Foreign,
+    },
+    Tuple(#[schema(atom = "Foreign")] Foreign, u64),
+}
+
+#[schema(Structural)]
+struct StructuralWithForeign {
+    #[schema(atom = "Foreign")]
+    foreign: Foreign,
+    count: u64,
+}
+
+#[test]
+fn test_field_atom_attribute() {
+    let foreign = || Schema::Atom("Foreign".to_string());
+    assert_eq!(
+        WithForeignField::schema(),
+        Schema::Named(Box::new(Named(
+            "WithForeignField".to_string(),
+            Schema::Struct(vec![
+                Named("foreign".to_string(), foreign()),
+                Named("count".to_string(), u64::schema()),
+            ])
+        )))
+    );
+    assert_eq!(
+        WithForeignTuple::schema(),
+        Schema::Named(Box::new(Named(
+            "WithForeignTuple".to_string(),
+            Schema::Product(vec![foreign(), u64::schema()])
+        )))
+    );
+    assert_eq!(
+        StructuralWithForeign::schema(),
+        Schema::Product(vec![foreign(), u64::schema()])
+    );
+    // The attribute is removed from the emitted type, and the enum schema uses it.
+    let text = WithForeignVariants::schema().to_string();
+    assert!(text.contains("Foreign"), "{text}");
+    assert!(!text.contains("u8"), "{text}");
+}
+
+#[test]
+fn test_std_atoms() {
+    let atom = |name: &str| Schema::Atom(name.to_string());
+    assert_eq!(std::path::PathBuf::schema(), atom("PathBuf"));
+    assert_eq!(std::time::Duration::schema(), atom("Duration"));
+    assert_eq!(std::net::IpAddr::schema(), atom("IpAddr"));
+    assert_eq!(std::net::SocketAddr::schema(), atom("SocketAddr"));
+    assert_eq!(std::net::SocketAddrV4::schema(), atom("SocketAddrV4"));
+    assert_eq!(std::net::SocketAddrV6::schema(), atom("SocketAddrV6"));
+}
+
+#[cfg(feature = "url")]
+#[test]
+fn test_url_atom() {
+    assert_eq!(url::Url::schema(), Schema::Atom("Url".to_string()));
+}
+
+#[cfg(feature = "iroh-base")]
+#[test]
+fn test_iroh_base_atoms() {
+    assert_eq!(
+        iroh_base::PublicKey::schema(),
+        Schema::Atom("PublicKey".to_string())
+    );
+    assert_eq!(
+        iroh_base::EndpointAddr::schema(),
+        Schema::Atom("EndpointAddr".to_string())
+    );
+}
