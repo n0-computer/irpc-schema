@@ -171,3 +171,34 @@ enum Duplicate {
 fn duplicate_case_types_panic() {
     let _ = postcard::to_allocvec(&Duplicate::Second(Get { key: "k".into() }));
 }
+
+/// `Store` with doc comments.
+#[serialize_stable]
+#[derive(Debug, Clone, PartialEq)]
+enum DocumentedStore {
+    /// Reads a value.
+    ///
+    /// Returns nothing if the key is missing.
+    Get(Get),
+    Put(Put),
+}
+
+#[test]
+fn docs_do_not_change_the_hash() {
+    let plain: Vec<_> = Store::schemas().map(|(_, _, hash)| hash).collect();
+    let documented: Vec<_> = DocumentedStore::schemas()
+        .map(|(_, _, hash)| hash)
+        .collect();
+    assert_eq!(plain, documented);
+    assert_eq!(
+        <DocumentedStore as StableEnum>::case_docs(),
+        [
+            "Reads a value.\n\nReturns nothing if the key is missing.",
+            ""
+        ]
+    );
+    assert_eq!(
+        <Combined as StableEnum>::case_docs().len(),
+        Combined::schemas().count()
+    );
+}

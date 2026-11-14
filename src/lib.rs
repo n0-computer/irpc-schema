@@ -1,4 +1,10 @@
 #![cfg_attr(n0_schema_docsrs, feature(doc_cfg))]
+// The macros name this crate as `::n0_schema`, also inside it.
+extern crate self as n0_schema;
+
+#[cfg(feature = "meta")]
+#[cfg_attr(n0_schema_docsrs, doc(cfg(feature = "meta")))]
+pub mod meta;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt, vec,
@@ -42,6 +48,11 @@ pub use n0_schema_derive::serialize_union;
 pub trait StableEnum: Sized {
     /// Returns the name, schema and hash of each case.
     fn case_schemas() -> Vec<(&'static str, &'static Schema, [u8; 32])>;
+
+    /// Returns the doc comment of each case, in the order of [`Self::case_schemas`].
+    ///
+    /// The docs are not part of the schema, so they do not change the hash.
+    fn case_docs() -> Vec<&'static str>;
 
     /// Reads the payload of the case with `hash`, or returns `None` if no case has this hash.
     #[doc(hidden)]
@@ -551,3 +562,13 @@ mod irpc_instances {
 #[cfg_attr(n0_schema_docsrs, doc(cfg(feature = "irpc")))]
 #[cfg(feature = "irpc")]
 pub use irpc_instances::ChannelsSchema;
+
+/// Returns the schema hash of request `R` of service `S`, as `serialize_service` sends it.
+///
+/// A client can compare it with the hashes that a server lists with
+/// [`meta::ListCases`](crate::meta), to check whether the server knows a request.
+#[cfg_attr(n0_schema_docsrs, doc(cfg(feature = "irpc")))]
+#[cfg(feature = "irpc")]
+pub fn request_hash<S: irpc::Service, R: ChannelsSchema<S>>() -> [u8; 32] {
+    SchemaAndHash::from(R::schema()).hash
+}

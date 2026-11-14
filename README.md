@@ -68,6 +68,8 @@ struct Point {
 
 despite being compatible in terms of serialized representation. Use nominal if you want to attach meaning in addition to the constituent types.
 
+The name defaults to the name of the Rust type. `#[schema(Nominal(name = "my_crate::Point"))]` sets it explicitly, for example to keep the schema when renaming the type, or to make a name unlikely to collide with other protocols.
+
 For the request and response types of a protocol, use nominal: a request type is defined by its meaning, not just its shape. Use structural only for types where the names really carry no meaning.
 
 The order of elements in a nominal or structural enum matters.
@@ -188,6 +190,23 @@ enum Combined {
 Unions can contain other unions. If two inner enums have a case with the same schema, the first use of the union panics.
 
 For [irpc] services, `#[combine_services]` also implements `irpc::Service` for the union, and generates `Combined::handler(store_tx, admin_tx)`, which returns an `irpc::rpc::Handler` that sends each request to the actor of its service. A server can then serve several services on one ALPN, while each client keeps using its own `Client<Store>` or `Client<Admin>`. See [examples/combined.rs].
+
+# Asking a server what it supports
+
+With the `meta` feature, `n0_schema::meta::MetaProtocol` is a small service that lists the cases of a server, with name, hash, schema text and doc comment of each. The doc comments of the variants are not part of the schema, so editing them does not change any hash. Add it to the union of a server, and answer it with `meta::serve`:
+
+```rust
+#[combine_services]
+#[derive(Debug)]
+enum Server {
+    Meta(MetaProtocol),
+    Store(StoreProtocol),
+}
+
+let handler = Server::handler(n0_schema::meta::serve::<Server>(), store_tx);
+```
+
+A client lists the cases with `ListCases`, and compares their hashes with `n0_schema::request_hash::<StoreProtocol, Get>()` to check whether the server knows a request before sending it. The requests of `MetaProtocol` never change.
 
 [postcard-rpc]: https://github.com/jamesmunns/postcard-rpc
 [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs

@@ -448,6 +448,7 @@ fn stable_enum(
     let name_strs: Vec<_> = names.iter().map(|name| name.to_string()).collect();
     let types: Vec<_> = variants.iter().map(|(_, ty)| *ty).collect();
     let schemas: Vec<_> = types.iter().map(|ty| schema_of(ty)).collect();
+    let docs: Vec<_> = input.variants.iter().map(|v| doc_text(&v.attrs)).collect();
 
     // Everything except the impls lives in an anonymous const, so that several
     // of these enums can share a module.
@@ -486,6 +487,10 @@ fn stable_enum(
             impl ::n0_schema::StableEnum for #enum_name {
                 fn case_schemas() -> ::std::vec::Vec<(&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
                     Self::schemas().collect()
+                }
+
+                fn case_docs() -> ::std::vec::Vec<&'static str> {
+                    ::std::vec![#(#docs),*]
                 }
 
                 fn deserialize_payload<'de, A: ::n0_schema::serde::de::SeqAccess<'de>>(
@@ -600,6 +605,12 @@ fn union_enum(input: &ItemEnum) -> syn::Result<proc_macro2::TokenStream> {
                     let mut cases = ::std::vec::Vec::new();
                     #(cases.extend(<#types as ::n0_schema::StableEnum>::case_schemas());)*
                     cases
+                }
+
+                fn case_docs() -> ::std::vec::Vec<&'static str> {
+                    let mut docs = ::std::vec::Vec::new();
+                    #(docs.extend(<#types as ::n0_schema::StableEnum>::case_docs());)*
+                    docs
                 }
 
                 fn deserialize_payload<'de, A: ::n0_schema::serde::de::SeqAccess<'de>>(
@@ -793,4 +804,24 @@ fn snake_case(name: &str) -> String {
         }
     }
     out
+}
+
+/// Returns the text of the doc comments in `attrs`, one line per `///` line.
+fn doc_text(attrs: &[syn::Attribute]) -> String {
+    let lines: Vec<String> = attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .filter_map(|attr| match &attr.meta {
+            Meta::NameValue(nv) => match &nv.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(text),
+                    ..
+                }) => Some(text.value()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .map(|line| line.strip_prefix(' ').unwrap_or(&line).to_owned())
+        .collect();
+    lines.join("\n")
 }
