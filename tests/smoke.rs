@@ -76,7 +76,7 @@ fn test_pretty_print() {
 fn test_unit_struct_schema() {
     assert_eq!(
         UnitStruct::schema(),
-        Schema::named("UnitStruct", Schema::Unit)
+        Schema::named("UnitStruct", Schema::Product(vec![]))
     );
 }
 
@@ -84,7 +84,7 @@ fn test_unit_struct_schema() {
 fn test_bottom_enum_schema() {
     assert_eq!(
         BottomEnum::schema(),
-        Schema::named("BottomEnum", Schema::Bottom)
+        Schema::named("BottomEnum", Schema::Enum(vec![]))
     );
 }
 

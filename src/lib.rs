@@ -115,18 +115,18 @@ pub fn check_disjoint_cases(
     Ok(())
 }
 
-/// The schema enum
+/// The schema enum.
+///
+/// Products and sums retain their structure at every cardinality: the unit type
+/// is an empty product, the bottom type is an empty sum, and single-element
+/// products and sums are not collapsed into their element.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Schema {
-    /// the unit type
-    Unit,
-    /// the bottom type
-    Bottom,
     /// an opaque atomic type, identified by its name
     Atom(String),
-    /// a product type, aka tuple
+    /// a product type, aka tuple; an empty product is the unit type
     Product(Vec<Schema>),
-    /// a sum type, aka unnamed enum
+    /// a sum type, aka unnamed enum; an empty sum is the bottom type
     Sum(Vec<Schema>),
     /// a struct type, tuple with named fields
     Struct(Vec<Named>),
@@ -167,16 +167,10 @@ impl fmt::Display for Named {
 impl fmt::Display for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            // Bottom type ⊥
-            Schema::Bottom => write!(f, "⊥"),
-
-            // Unit type ()
-            Schema::Unit => write!(f, "()"),
-
             // Atom (String, u32, etc.)
             Schema::Atom(name) => write!(f, "\"{}\"", name),
 
-            // Product types, tuples with one or more fields: X, Y, Z,
+            // Product types, tuples with zero or more fields: X, Y, Z,
             Schema::Product(types) => {
                 let elements = types
                     .iter()
@@ -196,6 +190,9 @@ impl fmt::Display for Schema {
                 write!(f, "({})", fields_str)
             }
 
+            // Empty sums have no values, unlike empty products.
+            Schema::Sum(types) if types.is_empty() => write!(f, "⊥"),
+
             // Sum types, enums with one or more variants: X | Y | Z |
             Schema::Sum(types) => {
                 let variants = types
@@ -205,6 +202,8 @@ impl fmt::Display for Schema {
                     .join("|");
                 write!(f, "({})", variants)
             }
+
+            Schema::Enum(variants) if variants.is_empty() => write!(f, "⊥"),
 
             // Named enum: "variant": X | "variant2": Y |
             Schema::Enum(variants) => {
@@ -253,9 +252,12 @@ impl Schema {
     pub fn pretty_print(&self, indent: usize) -> String {
         let indentation = " ".repeat(indent);
         match self {
-            Schema::Bottom => format!("{}⊥", indentation),
-            Schema::Unit => format!("{}()", indentation),
             Schema::Atom(name) => format!("{}\"{}\"", indentation, name),
+
+            Schema::Product(types) if types.is_empty() => format!("{}()", indentation),
+            Schema::Struct(fields) if fields.is_empty() => format!("{}()", indentation),
+            Schema::Sum(types) if types.is_empty() => format!("{}⊥", indentation),
+            Schema::Enum(variants) if variants.is_empty() => format!("{}⊥", indentation),
 
             // Product: Each field on a new line, indented
             Schema::Product(types) => {
@@ -443,7 +445,10 @@ impl<T: HasSchema> HasSchema for HashSet<T> {
 
 impl<T: HasSchema> HasSchema for Option<T> {
     fn schema() -> Schema {
-        Schema::Sum(vec![Schema::Unit, T::schema()])
+        Schema::Sum(vec![
+            Schema::Product(vec![]),
+            Schema::Product(vec![T::schema()]),
+        ])
     }
 }
 
@@ -467,16 +472,22 @@ impl<T: HasSchema> HasSchema for std::rc::Rc<T> {
 
 impl HasSchema for () {
     fn schema() -> Schema {
-        Schema::Unit
+        Schema::Product(vec![])
     }
 }
 
 impl<A: HasSchema, B: HasSchema> HasSchema for std::result::Result<A, B> {
     fn schema() -> Schema {
-        Schema::Enum(vec![
-            Named("Ok".to_string(), A::schema()),
-            Named("Err".to_string(), B::schema()),
+        Schema::Sum(vec![
+            Schema::Product(vec![A::schema()]),
+            Schema::Product(vec![B::schema()]),
         ])
+    }
+}
+
+impl<A: HasSchema> HasSchema for (A,) {
+    fn schema() -> Schema {
+        Schema::Product(vec![A::schema()])
     }
 }
 

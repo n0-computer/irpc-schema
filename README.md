@@ -44,6 +44,14 @@ enum Test {
 
 has the same schema as `Result<u64, &'static str>`. Renaming the cases or the enum does not cause a schema change.
 
+Structural schemas use products for fields and sums for enum variants, at every
+cardinality. The unit type `()` is `Product([])` and an empty enum is `Sum([])`.
+A single field stays a single-element product, and a single variant stays a
+single-element sum: neither is collapsed. `Option<T>` is
+`Sum([Product([]), Product([T::schema()])])`, and `Result<T, E>` is
+`Sum([Product([T::schema()]), Product([E::schema()])])`, just like equivalent
+structural enums.
+
 ## Nominal
 
 When declaring a schema as nominal, naming information will be kept. E.g. for a struct with named fields the names of the struct and the names of the fields will be included in the schema.
@@ -73,6 +81,19 @@ The name defaults to the name of the Rust type. `#[schema(Nominal(name = "my_cra
 For the request and response types of a protocol, use nominal: a request type is defined by its meaning, not just its shape. Use structural only for types where the names really carry no meaning.
 
 The order of elements in a nominal or structural enum matters.
+
+Nominal schemas also retain their structure at every cardinality: named fields
+use `Struct`, unnamed fields use `Product`, and enums use `Enum`, even when empty.
+Unit structs and unit variants have no fields and use an empty product. The type
+and variant names are retained as usual.
+
+### Breaking change from 0.2
+
+`Schema::Unit` and `Schema::Bottom` have been removed in favor of empty products
+and sums. `Option` and `Result` now match derived structural enums. Removing the
+two schema variants changes the postcard encoding of schemas, so all schema
+hashes change, including the meta protocol's hash. Peers using the old hashes
+are incompatible with this version. Payload serialization is unchanged.
 
 # Support for built in types
 
