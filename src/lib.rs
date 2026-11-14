@@ -1,4 +1,10 @@
 #![cfg_attr(n0_schema_docsrs, feature(doc_cfg))]
+// The macros name this crate as `::n0_schema`, also inside it.
+extern crate self as n0_schema;
+
+#[cfg(feature = "meta")]
+#[cfg_attr(n0_schema_docsrs, doc(cfg(feature = "meta")))]
+pub mod meta;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt, vec,
@@ -551,3 +557,13 @@ mod irpc_instances {
 #[cfg_attr(n0_schema_docsrs, doc(cfg(feature = "irpc")))]
 #[cfg(feature = "irpc")]
 pub use irpc_instances::ChannelsSchema;
+
+/// Returns the schema hash of request `R` of service `S`, as `serialize_service` sends it.
+///
+/// A client can compare it with the hashes that a server lists with
+/// [`meta::ListCases`](crate::meta), to check whether the server knows a request.
+#[cfg_attr(n0_schema_docsrs, doc(cfg(feature = "irpc")))]
+#[cfg(feature = "irpc")]
+pub fn request_hash<S: irpc::Service, R: ChannelsSchema<S>>() -> [u8; 32] {
+    SchemaAndHash::from(R::schema()).hash
+}

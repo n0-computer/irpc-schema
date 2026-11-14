@@ -18,6 +18,7 @@ irpc = { version = "1", default-features = false, optional = true }
 bytes = { version = "1", optional = true }
 url = { version = "2", optional = true }
 iroh-base = { version = "1", default-features = false, features = ["key"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "sync"], optional = true }
 
 [workspace]
 members = ["n0-schema-derive"]
@@ -43,6 +44,8 @@ irpc = ["dep:irpc"]
 bytes = ["dep:bytes"]
 url = ["dep:url"]
 iroh-base = ["dep:iroh-base"]
+# a protocol to list the requests a server supports, see `meta`
+meta = ["derive", "irpc", "irpc/rpc", "irpc/derive", "dep:tokio"]
 default = ["derive", "irpc", "bytes"]
 
 [[test]]
@@ -60,6 +63,10 @@ required-features = ["derive", "irpc"]
 [[example]]
 name = "combined"
 required-features = ["derive", "irpc"]
+
+[[test]]
+name = "meta"
+required-features = ["meta"]
 
 [[test]]
 name = "union"

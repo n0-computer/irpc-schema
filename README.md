@@ -189,6 +189,23 @@ Unions can contain other unions. If two inner enums have a case with the same sc
 
 For [irpc] services, `#[combine_services]` also implements `irpc::Service` for the union, and generates `Combined::handler(store_tx, admin_tx)`, which returns an `irpc::rpc::Handler` that sends each request to the actor of its service. A server can then serve several services on one ALPN, while each client keeps using its own `Client<Store>` or `Client<Admin>`. See [examples/combined.rs].
 
+# Asking a server what it supports
+
+With the `meta` feature, `n0_schema::meta::MetaProtocol` is a small service that lists the cases of a server, with name, hash and schema text of each. Add it to the union of a server, and answer it with `meta::serve`:
+
+```rust
+#[combine_services]
+#[derive(Debug)]
+enum Server {
+    Meta(MetaProtocol),
+    Store(StoreProtocol),
+}
+
+let handler = Server::handler(n0_schema::meta::serve::<Server>(), store_tx);
+```
+
+A client lists the cases with `ListCases`, and compares their hashes with `n0_schema::request_hash::<StoreProtocol, Get>()` to check whether the server knows a request before sending it. The requests of `MetaProtocol` never change.
+
 [postcard-rpc]: https://github.com/jamesmunns/postcard-rpc
 [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs
 [irpc]: https://docs.rs/irpc
