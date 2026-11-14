@@ -46,12 +46,13 @@ enum Server {
     Store(StoreProtocol),
 }
 
-/// The meta protocol is how peers find out about each other, so its hash must never change.
+/// Pin the meta protocol's hash for the uniform-product schema format.
+/// Changes within this format must preserve discovery compatibility.
 #[test]
 fn list_cases_hash_is_stable() {
     assert_eq!(
         hex::encode(request_hash::<MetaProtocol, ListCases>()),
-        "d3809d4f30d2c297109937c1962f0f2a0854861e9ee260427e4eeb4745da1e13"
+        "33209d7bf5c4b23a85ca001afd3e096291cfdee98add8dcaf3baf877c2dc5bad"
     );
 }
 

@@ -122,249 +122,70 @@ fn generate_atom_schema(
     }
 }
 
-// Generates a Structural schema (tuples or unnamed structs)
+// Fields are always a product, including zero or one field.
+fn generate_structural_fields(fields: &Fields) -> proc_macro2::TokenStream {
+    let schemas = fields.iter().map(field_schema);
+    quote! {
+        ::n0_schema::Schema::Product(vec![#(#schemas),*])
+    }
+}
+
+// Generates a Structural schema, without names.
 fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
     match data {
-        Data::Struct(data_struct) => match &data_struct.fields {
-            Fields::Named(fields) => {
-                let types: Vec<proc_macro2::TokenStream> = fields
-                    .named
-                    .iter()
-                    .map(|f| {
-                        let field_schema = field_schema(f);
-                        quote! {
-                            #field_schema
-                        }
-                    })
-                    .collect();
-                if types.is_empty() {
-                    quote! {
-                        ::n0_schema::Schema::Unit
-                    }
-                } else {
-                    quote! {
-                        ::n0_schema::Schema::Product(vec![#(#types),*])
-                    }
-                }
-            }
-            Fields::Unnamed(fields) => {
-                let types: Vec<proc_macro2::TokenStream> = fields
-                    .unnamed
-                    .iter()
-                    .map(|f| {
-                        let field_schema = field_schema(f);
-                        quote! {
-                            #field_schema
-                        }
-                    })
-                    .collect();
-                if types.is_empty() {
-                    quote! {
-                        ::n0_schema::Schema::Unit
-                    }
-                } else {
-                    quote! {
-                        ::n0_schema::Schema::Product(vec![#(#types),*])
-                    }
-                }
-            }
-            Fields::Unit => quote! {
-                ::n0_schema::Schema::Unit
-            },
-        },
-        Data::Enum(data_enum) => {
-            let variant_schemas: Vec<proc_macro2::TokenStream> = data_enum
+        Data::Struct(data) => generate_structural_fields(&data.fields),
+        Data::Enum(data) => {
+            let variants = data
                 .variants
                 .iter()
-                .map(|v| {
-                    let variant_fields = match &v.fields {
-                        Fields::Named(fields) => fields
-                            .named
-                            .iter()
-                            .map(|f| {
-                                let field_schema = field_schema(f);
-                                quote! {
-                                    #field_schema
-                                }
-                            })
-                            .collect(),
-                        Fields::Unnamed(fields) => fields
-                            .unnamed
-                            .iter()
-                            .map(|f| {
-                                let field_schema = field_schema(f);
-                                quote! {
-                                    #field_schema
-                                }
-                            })
-                            .collect(),
-                        Fields::Unit => vec![],
-                    };
-                    if variant_fields.is_empty() {
-                        quote! {
-                            ::n0_schema::Schema::Unit
-                        }
-                    } else {
-                        quote! {
-                            ::n0_schema::Schema::Product(vec![#(#variant_fields),*])
-                        }
-                    }
-                })
-                .collect();
-            if variant_schemas.is_empty() {
-                return quote! {
-                    ::n0_schema::Schema::Bottom
-                };
-            }
+                .map(|variant| generate_structural_fields(&variant.fields));
             quote! {
-                ::n0_schema::Schema::Sum(vec![#(#variant_schemas),*])
+                ::n0_schema::Schema::Sum(vec![#(#variants),*])
             }
         }
         _ => panic!("Unsupported type for Structural schema"),
     }
 }
 
-// Generates a Nominal schema (Struct or Enum with names)
+// Named fields remain a struct at every cardinality; unnamed fields are a product.
+fn generate_nominal_fields(fields: &Fields) -> proc_macro2::TokenStream {
+    match fields {
+        Fields::Named(fields) => {
+            let schemas = fields.named.iter().map(|field| {
+                let name = field.ident.as_ref().unwrap().to_string();
+                let schema = field_schema(field);
+                quote! { ::n0_schema::Named(#name.to_string(), #schema) }
+            });
+            quote! { ::n0_schema::Schema::Struct(vec![#(#schemas),*]) }
+        }
+        Fields::Unnamed(_) | Fields::Unit => generate_structural_fields(fields),
+    }
+}
+
+// Generates a Nominal schema, retaining type, field and variant names.
 fn generate_nominal_schema(
     name: &syn::Ident,
     data: &syn::Data,
     explicit_name: Option<&str>,
 ) -> proc_macro2::TokenStream {
     let name_text = explicit_name.unwrap_or(&name.to_string()).to_string();
-    match data {
-        Data::Struct(data_struct) => match &data_struct.fields {
-            Fields::Named(fields) => {
-                let field_schemas: Vec<proc_macro2::TokenStream> = fields
-                    .named
-                    .iter()
-                    .map(|f| {
-                        let field_name = f.ident.as_ref().unwrap().to_string();
-                        let field_schema = field_schema(f);
-                        quote! {
-                            ::n0_schema::Named(#field_name.to_string(), #field_schema)
-                        }
-                    })
-                    .collect();
-                let schema = if field_schemas.is_empty() {
-                    quote! { ::n0_schema::Schema::Unit }
-                } else {
-                    quote! { ::n0_schema::Schema::Struct(vec![#(#field_schemas),*]) }
-                };
-                quote! {
-                    ::n0_schema::Schema::Named(
-                        Box::new(::n0_schema::Named(#name_text.to_string(), #schema))
-                    )
-                }
-            }
-            Fields::Unnamed(fields) => {
-                let field_schemas: Vec<proc_macro2::TokenStream> = fields
-                    .unnamed
-                    .iter()
-                    .map(|f| {
-                        let field_schema = field_schema(f);
-                        quote! {
-                            #field_schema
-                        }
-                    })
-                    .collect();
-                let schema = if field_schemas.is_empty() {
-                    quote! { ::n0_schema::Schema::Unit }
-                } else {
-                    quote! { ::n0_schema::Schema::Product(vec![#(#field_schemas),*]) }
-                };
-                quote! {
-                    ::n0_schema::Schema::Named(
-                        Box::new(::n0_schema::Named(#name_text.to_string(), #schema))
-                    )
-                }
-            }
-            Fields::Unit => quote! {
-                ::n0_schema::Schema::Named(
-                    Box::new(::n0_schema::Named(#name_text.to_string(), ::n0_schema::Schema::Unit))
-                )
-            },
-        },
-        Data::Enum(data_enum) => {
-            let variants: Vec<proc_macro2::TokenStream> = data_enum
-                .variants
-                .iter()
-                .map(|v| {
-                    let variant_name = &v.ident;
-                    let variant_name_text = variant_name.to_string();
-                    match &v.fields {
-                        Fields::Named(fields) => {
-                            let named = fields
-                                .named
-                                .iter()
-                                .map(|f| {
-                                    let field_schema = field_schema(f);
-                                    let field_name = f.ident.as_ref().unwrap().to_string();
-                                    quote! {
-                                        ::n0_schema::Named(#field_name.to_string(),#field_schema)
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-                            // The fields of a variant are all present, so they are a struct.
-                            let schema_type = if named.is_empty() {
-                                quote! { ::n0_schema::Schema::Unit }
-                            } else {
-                                quote! { ::n0_schema::Schema::Struct(vec![#(#named),*]) }
-                            };
-                            quote! {
-                                ::n0_schema::Named(
-                                    #variant_name_text.to_string(),
-                                    #schema_type
-                                )
-                            }
-                        }
-                        Fields::Unnamed(fields) => {
-                            let unnamed = fields
-                                .unnamed
-                                .iter()
-                                .map(|f| {
-                                    let field_schema = field_schema(f);
-                                    quote! {
-                                        #field_schema
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-                            let schema_type = if unnamed.is_empty() {
-                                quote! { ::n0_schema::Schema::Unit }
-                            } else {
-                                quote! { ::n0_schema::Schema::Product(vec![#(#unnamed),*]) }
-                            };
-                            quote! {
-                                ::n0_schema::Named(
-                                    #variant_name_text.to_string(),
-                                    #schema_type
-                                )
-                            }
-                        }
-                        Fields::Unit => {
-                            quote! {
-                                ::n0_schema::Named(
-                                    #variant_name_text.to_string(),
-                                    ::n0_schema::Schema::Unit
-                                )
-                            }
-                        }
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            // An enum with one variant still writes its discriminant, unlike a struct.
-            let schema = if variants.is_empty() {
-                quote! { ::n0_schema::Schema::Bottom }
-            } else {
-                quote! { ::n0_schema::Schema::Enum(vec![#(#variants),*]) }
-            };
-            quote! {
-                ::n0_schema::Schema::Named(
-                    Box::new(::n0_schema::Named(#name_text.to_string(), #schema))
-                )
-            }
+    let schema = match data {
+        Data::Struct(data) => generate_nominal_fields(&data.fields),
+        Data::Enum(data) => {
+            let variants = data.variants.iter().map(|variant| {
+                let name = variant.ident.to_string();
+                let fields = generate_nominal_fields(&variant.fields);
+                quote! { ::n0_schema::Named(#name.to_string(), #fields) }
+            });
+            // Even a single-variant enum writes its discriminant.
+            quote! { ::n0_schema::Schema::Enum(vec![#(#variants),*]) }
         }
         _ => panic!("Unsupported type for Nominal schema"),
+    };
+    quote! {
+        ::n0_schema::Schema::Named(
+            Box::new(::n0_schema::Named(#name_text.to_string(), #schema))
+        )
     }
 }
 
