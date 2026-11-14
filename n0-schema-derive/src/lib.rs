@@ -304,12 +304,11 @@ fn generate_nominal_schema(
                                     }
                                 })
                                 .collect::<Vec<_>>();
+                            // The fields of a variant are all present, so they are a struct.
                             let schema_type = if named.is_empty() {
                                 quote! { ::n0_schema::Schema::Unit }
-                            } else if named.len() == 1 {
-                                quote! { ::n0_schema::Schema::Struct(vec![#(#named),*]) }
                             } else {
-                                quote! { ::n0_schema::Schema::Enum(vec![#(#named),*]) }
+                                quote! { ::n0_schema::Schema::Struct(vec![#(#named),*]) }
                             };
                             quote! {
                                 ::n0_schema::Named(
@@ -331,10 +330,8 @@ fn generate_nominal_schema(
                                 .collect::<Vec<_>>();
                             let schema_type = if unnamed.is_empty() {
                                 quote! { ::n0_schema::Schema::Unit }
-                            } else if unnamed.len() == 1 {
-                                quote! { ::n0_schema::Schema::Product(vec![#(#unnamed),*]) }
                             } else {
-                                quote! { ::n0_schema::Schema::Sum(vec![#(#unnamed),*]) }
+                                quote! { ::n0_schema::Schema::Product(vec![#(#unnamed),*]) }
                             };
                             quote! {
                                 ::n0_schema::Named(
@@ -355,10 +352,9 @@ fn generate_nominal_schema(
                 })
                 .collect::<Vec<_>>();
 
+            // An enum with one variant still writes its discriminant, unlike a struct.
             let schema = if variants.is_empty() {
                 quote! { ::n0_schema::Schema::Bottom }
-            } else if variants.len() == 1 {
-                quote! { ::n0_schema::Schema::Struct(vec![#(#variants),*]) }
             } else {
                 quote! { ::n0_schema::Schema::Enum(vec![#(#variants),*]) }
             };

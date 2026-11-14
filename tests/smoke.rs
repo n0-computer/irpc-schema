@@ -244,3 +244,34 @@ fn test_iroh_base_atoms() {
         Schema::Atom("iroh::EndpointAddr".to_string())
     );
 }
+
+#[schema(Nominal)]
+#[allow(dead_code)]
+enum State {
+    Idle,
+    Published { url: String, sequence: i64 },
+    Pair(u8, u16),
+}
+
+#[test]
+fn nominal_variant_fields_are_a_struct_or_product() {
+    assert_eq!(
+        State::schema().to_string(),
+        r#""State":("Idle":()|"Published":("url":"String","sequence":"i64")|"Pair":("u8","u16"))"#
+    );
+}
+
+#[schema(Nominal)]
+#[allow(dead_code)]
+enum OneVariant {
+    V(u64),
+}
+
+/// An enum writes a discriminant before its single variant, unlike a struct.
+#[test]
+fn single_variant_enum_is_an_enum() {
+    assert!(matches!(
+        OneVariant::schema(),
+        Schema::Named(named) if matches!(named.1, Schema::Enum(_))
+    ));
+}
