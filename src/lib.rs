@@ -49,6 +49,11 @@ pub trait StableEnum: Sized {
     /// Returns the name, schema and hash of each case.
     fn case_schemas() -> Vec<(&'static str, &'static Schema, [u8; 32])>;
 
+    /// Returns the doc comment of each case, in the order of [`Self::case_schemas`].
+    ///
+    /// The docs are not part of the schema, so they do not change the hash.
+    fn case_docs() -> Vec<&'static str>;
+
     /// Reads the payload of the case with `hash`, or returns `None` if no case has this hash.
     #[doc(hidden)]
     fn deserialize_payload<'de, A: serde::de::SeqAccess<'de>>(

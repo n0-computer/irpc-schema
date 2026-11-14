@@ -46,6 +46,9 @@ async fn list(endpoint_id: EndpointId, alpn: &str) -> Result<()> {
             case.name,
             case.schema
         );
+        for line in case.docs.lines() {
+            println!("    {line}");
+        }
     }
     endpoint.close().await;
     Ok(())
@@ -68,8 +71,10 @@ struct Put {
 #[serialize_service(StoreProtocol)]
 #[derive(Debug)]
 enum StoreProtocol {
+    /// Returns the value of `key`, or nothing if it is not set.
     #[rpc(tx = oneshot::Sender<Option<String>>)]
     Get(Get),
+    /// Sets `key` to `value`, replacing any previous value.
     #[rpc(tx = oneshot::Sender<()>)]
     Put(Put),
 }

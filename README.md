@@ -193,7 +193,7 @@ For [irpc] services, `#[combine_services]` also implements `irpc::Service` for t
 
 # Asking a server what it supports
 
-With the `meta` feature, `n0_schema::meta::MetaProtocol` is a small service that lists the cases of a server, with name, hash and schema text of each. Add it to the union of a server, and answer it with `meta::serve`:
+With the `meta` feature, `n0_schema::meta::MetaProtocol` is a small service that lists the cases of a server, with name, hash, schema text and doc comment of each. The doc comments of the variants are not part of the schema, so editing them does not change any hash. Add it to the union of a server, and answer it with `meta::serve`:
 
 ```rust
 #[combine_services]

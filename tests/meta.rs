@@ -23,6 +23,7 @@ struct Delete {
 #[serialize_service(StoreProtocol)]
 #[derive(Debug)]
 enum StoreProtocol {
+    /// Reads the value of a key.
     #[rpc(tx = oneshot::Sender<Option<String>>)]
     Get(Get),
 }
@@ -50,7 +51,7 @@ enum Server {
 fn list_cases_hash_is_stable() {
     assert_eq!(
         hex::encode(request_hash::<MetaProtocol, ListCases>()),
-        "1638de147d69bebaaad557ce149756c493679f43144664bd886e990bb91b9968"
+        "d3809d4f30d2c297109937c1962f0f2a0854861e9ee260427e4eeb4745da1e13"
     );
 }
 
@@ -75,6 +76,8 @@ async fn client_finds_out_which_requests_the_server_knows() -> testresult::TestR
     let names: Vec<_> = cases.iter().map(|case| case.name.as_str()).collect();
     assert_eq!(names, ["ListCases", "Get"]);
     assert!(cases[1].schema.contains("\"key\""), "{}", cases[1].schema);
+    assert_eq!(cases[1].docs, "Reads the value of a key.");
+    assert!(cases[0].docs.starts_with("Lists"), "{}", cases[0].docs);
 
     // A later client checks before it sends.
     let supported = |hash: [u8; 32]| cases.iter().any(|case| case.hash == hash);

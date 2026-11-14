@@ -43,6 +43,8 @@ pub struct CaseInfo {
     pub hash: [u8; 32],
     /// The schema in its text form, for people.
     pub schema: String,
+    /// The doc comment of the case, which is not part of its schema.
+    pub docs: String,
 }
 
 /// Requests about the protocol of a server.
@@ -50,6 +52,7 @@ pub struct CaseInfo {
 #[serialize_service(MetaProtocol)]
 #[derive(Debug)]
 pub enum MetaProtocol {
+    /// Lists the name, hash, schema and docs of each request that the server supports.
     #[rpc(tx = oneshot::Sender<Vec<CaseInfo>>)]
     ListCases(ListCases),
 }
@@ -58,10 +61,12 @@ pub enum MetaProtocol {
 pub fn cases<T: StableEnum>() -> Vec<CaseInfo> {
     T::case_schemas()
         .into_iter()
-        .map(|(name, schema, hash)| CaseInfo {
+        .zip(T::case_docs())
+        .map(|((name, schema, hash), docs)| CaseInfo {
             name: name.to_owned(),
             hash,
             schema: schema.to_string(),
+            docs: docs.to_owned(),
         })
         .collect()
 }
