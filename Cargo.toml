@@ -5,6 +5,7 @@ edition = "2021"
 description = "simple schema language for rpc calls"
 authors = ["rklaehn <rklaehn@protonmail.com>"]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/n0-computer/n0-schema"
 keywords = ["quic", "schema", "rpc"]
 
 

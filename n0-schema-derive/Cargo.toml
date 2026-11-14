@@ -5,6 +5,7 @@ description = "derive macro for n0-schema"
 edition = "2021"
 authors = ["rklaehn <rklaehn@protonmail.com>"]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/n0-computer/n0-schema"
 keywords = ["quic", "schema", "rpc"]
 
 [lib]
