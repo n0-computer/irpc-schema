@@ -377,205 +377,24 @@ fn generate_nominal_schema(
 ///
 /// Each variant must have a single unnamed field of distinct type. Each type
 /// must implement `HasSchema`.
+///
+/// The enum is serialized as the schema hash of the case, followed by its
+/// payload. It implements `n0_schema::StableEnum`, so it can be part of a
+/// [`macro@serialize_union`].
 #[proc_macro_attribute]
 pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Parse the input tokens into a syntax tree
     let input = parse_macro_input!(item as ItemEnum);
-
-    // Get the original enum
-    let original_enum = input.clone();
-
-    // Get the name of the enum
-    let enum_name = &input.ident;
-
-    // Generate names for our hash struct
-    let schema_struct_name = syn::Ident::new(&format!("{}Schemas", enum_name), enum_name.span());
-    let schema_struct_static_name =
-        syn::Ident::new(&format!("__{}_SCHEMAS", enum_name), enum_name.span());
-
-    // Collect all variants
-    let variants = &input.variants;
-
-    // Make sure all variants have a single unnamed field
-    for variant in variants {
-        match &variant.fields {
-            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                // This is good - a single unnamed field
-            }
-            _ => panic!("HashDiscriminator only supports variants with a single unnamed field"),
-        }
-    }
-
-    // Collect all variant names and their field types
-    let mut variant_names = Vec::new();
-    let mut field_types = Vec::new();
-
-    for variant in variants {
-        let variant_name = &variant.ident;
-        variant_names.push(variant_name);
-
-        let field_type = match &variant.fields {
-            Fields::Unnamed(fields) => &fields.unnamed.first().unwrap().ty,
-            _ => unreachable!(), // We've already checked this above
-        };
-
-        field_types.push(field_type);
-    }
-
-    // Define fields for our SchemaHashes struct
-    let schema_struct_fields = variant_names.iter().map(|variant_name| {
-        quote! { pub #variant_name: ::n0_schema::SchemaAndHash }
-    });
-
-    // Generate initialization for our SchemaHashes struct
-    let schema_struct_inits =
-        variant_names
-            .iter()
-            .zip(field_types.iter())
-            .map(|(variant_name, field_type)| {
-                quote! {
-                    #variant_name: ::n0_schema::SchemaAndHash::from(<#field_type as ::n0_schema::HasSchema>::schema())
-                }
-            });
-
-    let schema_struct_to_tuples = variant_names.iter().map(|variant_name| {
-        let ident = variant_name.to_string();
-        quote! {
-            (#ident, &schema_struct_value.#variant_name.schema, schema_struct_value.#variant_name.hash)
-        }
-    });
-
-    // Generate serialization arms using the static hashes
-    let serialize_arms = variant_names.iter().map(|variant_name| {
-        quote! {
-            #enum_name::#variant_name(payload) => {
-                let hash = schema_struct_value.#variant_name.hash;
-
-                let mut tup = serializer.serialize_tuple(2)?;
-                tup.serialize_element(&hash)?;
-                tup.serialize_element(payload)?;
-                tup.end()
-            }
-        }
-    });
-
-    // Generate deserialization branches using the static hashes
-    let deserialize_branches =
-        variant_names
-            .iter()
-            .zip(field_types.iter())
-            .map(|(variant_name, field_type)| {
-                quote! {
-                    if &hash_bytes == &schema_struct_value.#variant_name.hash {
-                        let payload = seq.next_element::<#field_type>()?.ok_or_else(||
-                            ::n0_schema::serde::de::Error::custom("missing payload"))?;
-                        return Ok(#enum_name::#variant_name(payload));
-                    }
-                }
-            });
-
-    // Generate the implementation
-    let generated_impls = quote! {
-        // The original enum definition
-        #original_enum
-
-        // Define a struct to hold the schema hashes
-        #[allow(non_snake_case)]
-        #[derive(Debug)]
-        struct #schema_struct_name {
-            #(#schema_struct_fields),*
-        }
-
-        // Create a static instance of our hashes using std::sync::OnceLock
-        use std::sync::OnceLock;
-        #[allow(non_upper_case_globals)]
-        static #schema_struct_static_name: OnceLock<#schema_struct_name> = OnceLock::new();
-
-        impl #schema_struct_name {
-            // Create a new instance with all the hashes computed
-            fn new() -> Self {
-                Self {
-                    #(#schema_struct_inits),*
-                }
-            }
-
-            // Static accessor function to get or initialize the global instance
-            fn get() -> &'static Self {
-                #schema_struct_static_name.get_or_init(|| Self::new())
-            }
-        }
-
-        impl #enum_name {
-            pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
-                let schema_struct_value = #schema_struct_name::get();
-                [#(#schema_struct_to_tuples),*].into_iter()
-            }
-        }
-
-        // Implementation of serde::Serialize for the enum
-        impl ::n0_schema::serde::Serialize for #enum_name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: ::n0_schema::serde::Serializer,
-            {
-                use ::n0_schema::serde::ser::SerializeTuple;
-                let schema_struct_value = #schema_struct_name::get();
-
-                match self {
-                    #(#serialize_arms),*
-                }
-            }
-        }
-
-        // Implementation of serde::Deserialize for the enum with visitor inside
-        impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: ::n0_schema::serde::Deserializer<'de>,
-            {
-                // Define the visitor struct inside the deserialize implementation
-                struct Visitor;
-
-                impl<'de> ::n0_schema::serde::de::Visitor<'de> for Visitor {
-                    type Value = #enum_name;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                        formatter.write_str("a tuple with a hash discriminator and payload")
-                    }
-
-                    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-                    where
-                        A: ::n0_schema::serde::de::SeqAccess<'de>,
-                    {
-                        // Deserialize the hash discriminator (first element)
-                        let hash_bytes = seq.next_element::<[u8; 32]>()?.ok_or_else(||
-                            ::n0_schema::serde::de::Error::custom("missing hash"))?;
-
-                        // Get the schema hashes
-                        let schema_struct_value = #schema_struct_name::get();
-
-                        // Check against our static hashes
-                        #(#deserialize_branches)*
-
-                        // If none matched, return an error
-                        Err(::n0_schema::serde::de::Error::custom("unknown discriminator"))
-                    }
-                }
-
-                // Use the locally-defined visitor
-                deserializer.deserialize_tuple(2, Visitor)
-            }
-        }
-    };
-
-    // Return the generated code
-    TokenStream::from(generated_impls)
+    stable_enum(input, |ty| {
+        quote! { <#ty as ::n0_schema::HasSchema>::schema() }
+    })
+    .unwrap_or_else(syn::Error::into_compile_error)
+    .into()
 }
 
 /// This is identical to `serialize_stable`, but for a specific service.
 ///
 /// The schema hashes for each variant will include not just the message type itself,
-/// but also the kind (none, oneshot, spsc) and type of tx and rx channels it uses.
+/// but also the kind (none, oneshot, mpsc) and type of tx and rx channels it uses.
 ///
 /// That way any change to channel kinds and types will result in a different hash,
 /// just like a change to the message type itself.
@@ -588,200 +407,390 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// This macro requires that `irpc::Channels` is implemented for the given service type
 /// for each variant of the enum. It also requires that HasSchema is implemented for
-/// all channlels payload types.
+/// all channel payload types.
 #[proc_macro_attribute]
 pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Service for which this macro is applied
     let service = parse_macro_input!(attr as syn::Ident);
-
-    // Parse the input tokens into a syntax tree
     let input = parse_macro_input!(item as ItemEnum);
+    stable_enum(input, |ty| {
+        quote! { <#ty as ::n0_schema::ChannelsSchema<#service>>::schema() }
+    })
+    .unwrap_or_else(syn::Error::into_compile_error)
+    .into()
+}
 
-    // Get the original enum
-    let original_enum = input.clone();
-
-    // Get the name of the enum
-    let enum_name = &input.ident;
-
-    // Generate names for our hash struct
-    let schema_struct_name = syn::Ident::new(&format!("{}Schemas", enum_name), enum_name.span());
-    let schema_struct_static_name =
-        syn::Ident::new(&format!("__{}_SCHEMAS", enum_name), enum_name.span());
-
-    // Collect all variants
-    let variants = &input.variants;
-
-    // Make sure all variants have a single unnamed field
-    for variant in variants {
-        match &variant.fields {
+/// Returns the name and the type of the single unnamed field of each variant.
+fn single_field_variants(input: &ItemEnum) -> syn::Result<Vec<(&syn::Ident, &syn::Type)>> {
+    input
+        .variants
+        .iter()
+        .map(|variant| match &variant.fields {
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-                // This is good - a single unnamed field
+                Ok((&variant.ident, &fields.unnamed[0].ty))
             }
-            _ => panic!("HashDiscriminator only supports variants with a single unnamed field"),
-        }
-    }
+            _ => Err(syn::Error::new_spanned(
+                variant,
+                "each variant must have a single unnamed field",
+            )),
+        })
+        .collect()
+}
 
-    // Collect all variant names and their field types
-    let mut variant_names = Vec::new();
-    let mut field_types = Vec::new();
+/// Generates the hash-discriminated serde impls and `StableEnum` for `input`.
+fn stable_enum(
+    input: ItemEnum,
+    schema_of: impl Fn(&syn::Type) -> proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let enum_name = &input.ident;
+    let enum_str = enum_name.to_string();
+    let variants = single_field_variants(&input)?;
+    let names: Vec<_> = variants.iter().map(|(name, _)| *name).collect();
+    let name_strs: Vec<_> = names.iter().map(|name| name.to_string()).collect();
+    let types: Vec<_> = variants.iter().map(|(_, ty)| *ty).collect();
+    let schemas: Vec<_> = types.iter().map(|ty| schema_of(ty)).collect();
 
-    for variant in variants {
-        let variant_name = &variant.ident;
-        variant_names.push(variant_name);
+    // Everything except the impls lives in an anonymous const, so that several
+    // of these enums can share a module.
+    Ok(quote! {
+        #input
 
-        let field_type = match &variant.fields {
-            Fields::Unnamed(fields) => &fields.unnamed.first().unwrap().ty,
-            _ => unreachable!(), // We've already checked this above
-        };
+        const _: () = {
+            #[allow(non_snake_case)]
+            struct Schemas {
+                #(#names: ::n0_schema::SchemaAndHash),*
+            }
 
-        field_types.push(field_type);
-    }
+            fn schemas() -> &'static Schemas {
+                static SCHEMAS: ::std::sync::OnceLock<Schemas> = ::std::sync::OnceLock::new();
+                SCHEMAS.get_or_init(|| {
+                    let s = Schemas {
+                        #(#names: ::n0_schema::SchemaAndHash::from(#schemas)),*
+                    };
+                    // Two cases with the same schema would share a hash, and the second could never be read.
+                    let cases = [#((#name_strs, s.#names.hash)),*];
+                    if let Err(err) = ::n0_schema::check_disjoint_cases(#enum_str, cases) {
+                        panic!("{err}");
+                    }
+                    s
+                })
+            }
 
-    // Define fields for our SchemaHashes struct
-    let schema_struct_fields = variant_names.iter().map(|variant_name| {
-        quote! { pub #variant_name: ::n0_schema::SchemaAndHash }
-    });
-
-    // Generate initialization for our SchemaHashes struct
-    let schema_struct_inits =
-        variant_names
-            .iter()
-            .zip(field_types.iter())
-            .map(|(variant_name, field_type)| {
-                quote! {
-                    #variant_name: ::n0_schema::SchemaAndHash::from(<#field_type as ::n0_schema::ChannelsSchema<#service>>::schema())
+            impl #enum_name {
+                /// Returns the name, schema and hash of each case.
+                pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
+                    let s = schemas();
+                    [#((#name_strs, &s.#names.schema, s.#names.hash)),*].into_iter()
                 }
-            });
-
-    let schema_struct_to_tuples = variant_names.iter().map(|variant_name| {
-        let ident = variant_name.to_string();
-        quote! {
-            (#ident, &schema_struct_value.#variant_name.schema, schema_struct_value.#variant_name.hash)
-        }
-    });
-
-    // Generate serialization arms using the static hashes
-    let serialize_arms = variant_names.iter().map(|variant_name| {
-        quote! {
-            #enum_name::#variant_name(payload) => {
-                let hash = schema_struct_value.#variant_name.hash;
-
-                let mut tup = serializer.serialize_tuple(2)?;
-                tup.serialize_element(&hash)?;
-                tup.serialize_element(payload)?;
-                tup.end()
             }
-        }
-    });
 
-    // Generate deserialization branches using the static hashes
-    let deserialize_branches =
-        variant_names
-            .iter()
-            .zip(field_types.iter())
-            .map(|(variant_name, field_type)| {
-                quote! {
-                    if &hash_bytes == &schema_struct_value.#variant_name.hash {
-                        let payload = seq.next_element::<#field_type>()?.ok_or_else(||
-                            ::n0_schema::serde::de::Error::custom("missing payload"))?;
-                        return Ok(#enum_name::#variant_name(payload));
+            impl ::n0_schema::StableEnum for #enum_name {
+                fn case_schemas() -> ::std::vec::Vec<(&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
+                    Self::schemas().collect()
+                }
+
+                fn deserialize_payload<'de, A: ::n0_schema::serde::de::SeqAccess<'de>>(
+                    hash: &[u8; 32],
+                    seq: &mut A,
+                ) -> ::std::result::Result<::std::option::Option<Self>, A::Error> {
+                    let s = schemas();
+                    #(
+                        if hash == &s.#names.hash {
+                            let payload = seq.next_element::<#types>()?.ok_or_else(||
+                                ::n0_schema::serde::de::Error::custom("missing payload"))?;
+                            return Ok(Some(#enum_name::#names(payload)));
+                        }
+                    )*
+                    Ok(None)
+                }
+            }
+
+            impl ::n0_schema::serde::Serialize for #enum_name {
+                fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
+                where
+                    S: ::n0_schema::serde::Serializer,
+                {
+                    use ::n0_schema::serde::ser::SerializeTuple;
+                    let s = schemas();
+                    let mut tup = serializer.serialize_tuple(2)?;
+                    match self {
+                        #(
+                            #enum_name::#names(payload) => {
+                                tup.serialize_element(&s.#names.hash)?;
+                                tup.serialize_element(payload)?;
+                            }
+                        )*
+                    }
+                    tup.end()
+                }
+            }
+
+            impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
+                fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+                where
+                    D: ::n0_schema::serde::Deserializer<'de>,
+                {
+                    deserializer.deserialize_tuple(2, ::n0_schema::__private::StableVisitor::<Self>::new())
+                }
+            }
+        };
+    })
+}
+
+/// Combines several hash-discriminated enums into one, without changing their wire format.
+///
+/// Each variant must have a single unnamed field whose type implements
+/// `n0_schema::StableEnum`, such as an enum with [`macro@serialize_stable`],
+/// [`macro@serialize_service`] or another union.
+///
+/// A value serializes exactly like the inner value. Deserializing reads the
+/// schema hash and picks the variant whose type has a case with this hash.
+/// Since the hash identifies the case, not its position, there is no ambiguity,
+/// unless two inner enums have a case with the same schema. The first use
+/// of the union checks for that, and panics if it happens.
+///
+/// ```ignore
+/// #[serialize_union]
+/// #[derive(Debug)]
+/// enum Combined {
+///     Store(StoreProtocol),
+///     Admin(AdminProtocol),
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn serialize_union(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemEnum);
+    union_enum(&input)
+        .map(|tokens| quote! { #input #tokens })
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Generates the transparent serde impls and `StableEnum` for a union.
+fn union_enum(input: &ItemEnum) -> syn::Result<proc_macro2::TokenStream> {
+    let enum_name = &input.ident;
+    let enum_str = enum_name.to_string();
+    let variants = single_field_variants(input)?;
+    let names: Vec<_> = variants.iter().map(|(name, _)| *name).collect();
+    let types: Vec<_> = variants.iter().map(|(_, ty)| *ty).collect();
+
+    Ok(quote! {
+        const _: () = {
+            fn check() {
+                static CHECKED: ::std::sync::OnceLock<()> = ::std::sync::OnceLock::new();
+                CHECKED.get_or_init(|| {
+                    let cases = ::std::iter::empty()
+                        #(.chain(<#types as ::n0_schema::StableEnum>::case_schemas()))*
+                        .map(|(name, _, hash)| (name, hash));
+                    if let Err(err) = ::n0_schema::check_disjoint_cases(#enum_str, cases) {
+                        panic!("{err}");
+                    }
+                });
+            }
+
+            impl #enum_name {
+                /// Returns the name, schema and hash of each case of all inner enums.
+                pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
+                    <Self as ::n0_schema::StableEnum>::case_schemas().into_iter()
+                }
+            }
+
+            impl ::n0_schema::StableEnum for #enum_name {
+                fn case_schemas() -> ::std::vec::Vec<(&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
+                    check();
+                    let mut cases = ::std::vec::Vec::new();
+                    #(cases.extend(<#types as ::n0_schema::StableEnum>::case_schemas());)*
+                    cases
+                }
+
+                fn deserialize_payload<'de, A: ::n0_schema::serde::de::SeqAccess<'de>>(
+                    hash: &[u8; 32],
+                    seq: &mut A,
+                ) -> ::std::result::Result<::std::option::Option<Self>, A::Error> {
+                    check();
+                    #(
+                        if let Some(inner) = <#types as ::n0_schema::StableEnum>::deserialize_payload(hash, seq)? {
+                            return Ok(Some(#enum_name::#names(inner)));
+                        }
+                    )*
+                    Ok(None)
+                }
+            }
+
+            impl ::n0_schema::serde::Serialize for #enum_name {
+                fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
+                where
+                    S: ::n0_schema::serde::Serializer,
+                {
+                    check();
+                    match self {
+                        #(#enum_name::#names(inner) => ::n0_schema::serde::Serialize::serialize(inner, serializer)),*
                     }
                 }
-            });
-
-    // Generate the implementation
-    let generated_impls = quote! {
-        // The original enum definition
-        #original_enum
-
-        // Define a struct to hold the schema hashes
-        #[allow(non_snake_case)]
-        struct #schema_struct_name {
-            #(#schema_struct_fields),*
-        }
-
-        // Create a static instance of our hashes using std::sync::OnceLock
-        use std::sync::OnceLock;
-        #[allow(non_upper_case_globals)]
-        static #schema_struct_static_name: OnceLock<#schema_struct_name> = OnceLock::new();
-
-        impl #schema_struct_name {
-            // Create a new instance with all the hashes computed
-            fn new() -> Self {
-                Self {
-                    #(#schema_struct_inits),*
-                }
             }
 
-            // Static accessor function to get or initialize the global instance
-            fn get() -> &'static Self {
-                #schema_struct_static_name.get_or_init(|| Self::new())
+            impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
+                fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+                where
+                    D: ::n0_schema::serde::Deserializer<'de>,
+                {
+                    check();
+                    deserializer.deserialize_tuple(2, ::n0_schema::__private::StableVisitor::<Self>::new())
+                }
+            }
+        };
+    })
+}
+
+/// Combines several irpc services into one, for serving them on one connection.
+///
+/// This is [`macro@serialize_union`] for enums with [`macro@serialize_service`],
+/// plus an `irpc::Service` impl for the union. Clients keep using the inner
+/// services, each with its own `Client`, since the union has the same wire
+/// format as each of them.
+///
+/// It generates:
+/// - a message enum, named `<Union>Message` or set with `message = Name`, with
+///   the message type of each inner service, and `irpc::Service` and
+///   `irpc::rpc::RemoteService` for the union.
+/// - `handler`, which takes one `irpc::LocalSender` per inner service and
+///   returns an `irpc::rpc::Handler` that sends each request to the sender of
+///   its service.
+///
+/// All inner services must agree on span propagation, which is checked at compile time.
+/// The generated code needs the `rpc` feature of irpc.
+///
+/// ```ignore
+/// #[combine_services]
+/// #[derive(Debug)]
+/// enum Combined {
+///     Store(StoreProtocol),
+///     Admin(AdminProtocol),
+/// }
+///
+/// let handler = Combined::handler(store_tx, admin_tx);
+/// ```
+#[proc_macro_attribute]
+pub fn combine_services(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemEnum);
+    let mut message = None;
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("message") {
+            message = Some(meta.value()?.parse::<syn::Ident>()?);
+            Ok(())
+        } else {
+            Err(meta.error("unsupported combine_services argument"))
+        }
+    });
+    parse_macro_input!(attr with parser);
+    combine_services_impl(&input, message)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn combine_services_impl(
+    input: &ItemEnum,
+    message: Option<syn::Ident>,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let enum_name = &input.ident;
+    let vis = &input.vis;
+    let union = union_enum(input)?;
+    let variants = single_field_variants(input)?;
+    let Some((_, first)) = variants.first() else {
+        return Err(syn::Error::new_spanned(
+            input,
+            "combine_services needs at least one service",
+        ));
+    };
+    let names: Vec<_> = variants.iter().map(|(name, _)| *name).collect();
+    let types: Vec<_> = variants.iter().map(|(_, ty)| *ty).collect();
+    let params: Vec<_> = names
+        .iter()
+        .map(|name| syn::Ident::new(&snake_case(&name.to_string()), name.span()))
+        .collect();
+    let message = message
+        .unwrap_or_else(|| syn::Ident::new(&format!("{enum_name}Message"), enum_name.span()));
+    let irpc = quote! { ::n0_schema::irpc };
+
+    Ok(quote! {
+        #input
+        #union
+
+        /// The message of one of the combined services.
+        #vis enum #message {
+            #(#names(<#types as #irpc::Service>::Message)),*
+        }
+
+        #(
+            const _: () = assert!(
+                <#types as #irpc::Service>::SPAN_PROPAGATION == <#first as #irpc::Service>::SPAN_PROPAGATION,
+                "combined services must agree on span propagation",
+            );
+        )*
+
+        impl #irpc::Service for #enum_name {
+            type Message = #message;
+            const SPAN_PROPAGATION: bool = <#first as #irpc::Service>::SPAN_PROPAGATION;
+
+            fn new_request_span(&self, req_id: u64) -> #irpc::__macro_exports::tracing::Span {
+                match self {
+                    #(#enum_name::#names(inner) => #irpc::Service::new_request_span(inner, req_id)),*
+                }
+            }
+        }
+
+        impl #irpc::rpc::RemoteService for #enum_name {
+            fn with_remote_channels(
+                self,
+                rx: #irpc::__macro_exports::RecvStream,
+                tx: #irpc::__macro_exports::SendStream,
+            ) -> Self::Message {
+                match self {
+                    #(#enum_name::#names(inner) => #message::#names(
+                        #irpc::rpc::RemoteService::with_remote_channels(inner, rx, tx)
+                    )),*
+                }
             }
         }
 
         impl #enum_name {
-            pub fn schemas() -> impl ::std::iter::Iterator<Item = (&'static str, &'static ::n0_schema::Schema, [u8; 32])> {
-                let schema_struct_value = #schema_struct_name::get();
-                [#(#schema_struct_to_tuples),*].into_iter()
-            }
-        }
-
-        // Implementation of serde::Serialize for the enum
-        impl ::n0_schema::serde::Serialize for #enum_name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: ::n0_schema::serde::Serializer,
-            {
-                use ::n0_schema::serde::ser::SerializeTuple;
-                let schema_struct_value = #schema_struct_name::get();
-
-                match self {
-                    #(#serialize_arms),*
-                }
-            }
-        }
-
-        // Implementation of serde::Deserialize for the enum with visitor inside
-        impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: ::n0_schema::serde::Deserializer<'de>,
-            {
-                // Define the visitor struct inside the deserialize implementation
-                struct Visitor;
-
-                impl<'de> ::n0_schema::serde::de::Visitor<'de> for Visitor {
-                    type Value = #enum_name;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                        formatter.write_str("a tuple with a hash discriminator and payload")
+            /// Returns a handler that sends each request to the sender of its service.
+            #[allow(clippy::too_many_arguments)]
+            #vis fn handler(#(#params: impl ::std::convert::Into<#irpc::LocalSender<#types>>),*) -> #irpc::rpc::Handler<Self> {
+                #(let #params: #irpc::LocalSender<#types> = #params.into();)*
+                #irpc::rpc::Handler::raw(move |msg: Self, rx, tx| {
+                    // Attach the channels here, inside the request span.
+                    let send: ::std::pin::Pin<::std::boxed::Box<
+                        dyn ::std::future::Future<Output = ::std::result::Result<(), #irpc::channel::SendError>> + Send
+                    >> = match msg {
+                        #(#enum_name::#names(inner) => ::std::boxed::Box::pin(#params.send_raw(
+                            #irpc::rpc::RemoteService::with_remote_channels(inner, rx, tx)
+                        ))),*
+                    };
+                    async move {
+                        // A stopped service closes the connection, as with `Handler::from_sender`.
+                        send.await.map_err(|_| #irpc::rpc::HandlerError::close_connection(
+                            #irpc::rpc::VarInt::from_u32(0),
+                            b"",
+                        ))
                     }
-
-                    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-                    where
-                        A: ::n0_schema::serde::de::SeqAccess<'de>,
-                    {
-                        // Deserialize the hash discriminator (first element)
-                        let hash_bytes = seq.next_element::<[u8; 32]>()?.ok_or_else(||
-                            ::n0_schema::serde::de::Error::custom("missing hash"))?;
-
-                        // Get the schema hashes
-                        let schema_struct_value = #schema_struct_name::get();
-
-                        // Check against our static hashes
-                        #(#deserialize_branches)*
-
-                        // If none matched, return an error
-                        Err(::n0_schema::serde::de::Error::custom("unknown discriminator"))
-                    }
-                }
-
-                // Use the locally-defined visitor
-                deserializer.deserialize_tuple(2, Visitor)
+                })
             }
         }
-    };
+    })
+}
 
-    // Return the generated code
-    TokenStream::from(generated_impls)
+/// Converts a variant name like `BlobStore` to a parameter name like `blob_store`.
+fn snake_case(name: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }

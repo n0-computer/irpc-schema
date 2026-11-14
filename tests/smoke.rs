@@ -237,10 +237,10 @@ fn test_url_atom() {
 fn test_iroh_base_atoms() {
     assert_eq!(
         iroh_base::PublicKey::schema(),
-        Schema::Atom("PublicKey".to_string())
+        Schema::Atom("ed25519::PublicKey".to_string())
     );
     assert_eq!(
         iroh_base::EndpointAddr::schema(),
-        Schema::Atom("EndpointAddr".to_string())
+        Schema::Atom("iroh::EndpointAddr".to_string())
     );
 }
