@@ -612,6 +612,7 @@ fn union_enum(input: &ItemEnum) -> syn::Result<proc_macro2::TokenStream> {
                 where
                     S: ::n0_schema::serde::Serializer,
                 {
+                    check();
                     match self {
                         #(#enum_name::#names(inner) => ::n0_schema::serde::Serialize::serialize(inner, serializer)),*
                     }
@@ -623,6 +624,7 @@ fn union_enum(input: &ItemEnum) -> syn::Result<proc_macro2::TokenStream> {
                 where
                     D: ::n0_schema::serde::Deserializer<'de>,
                 {
+                    check();
                     deserializer.deserialize_tuple(2, ::n0_schema::__private::StableVisitor::<Self>::new())
                 }
             }

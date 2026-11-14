@@ -133,7 +133,27 @@ enum Overlapping {
 }
 
 #[test]
-#[should_panic(expected = "have the same schema hash")]
 fn overlapping_cases_panic() {
-    let _ = <Overlapping as StableEnum>::case_schemas();
+    fn assert_overlap_panic(f: impl FnOnce() + std::panic::UnwindSafe) {
+        let panic = std::panic::catch_unwind(f).expect_err("overlapping cases must panic");
+        let message = panic.downcast_ref::<String>().expect("panic message");
+        assert!(message.contains("have the same schema hash"), "{message}");
+    }
+
+    let reader = Reader::Get(Get { key: "k".into() });
+    let bytes = postcard::to_allocvec(&reader).unwrap();
+    let overlapping = Overlapping::Reader(reader);
+    assert_overlap_panic(|| {
+        let _ = postcard::to_allocvec(&overlapping);
+    });
+    assert_overlap_panic(|| {
+        let _ = postcard::from_bytes::<Overlapping>(&bytes);
+    });
+    // Validate the type even if the input is too short to read a hash.
+    assert_overlap_panic(|| {
+        let _ = postcard::from_bytes::<Overlapping>(&[]);
+    });
+    assert_overlap_panic(|| {
+        let _ = <Overlapping as StableEnum>::case_schemas();
+    });
 }
