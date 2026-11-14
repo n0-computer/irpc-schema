@@ -468,7 +468,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 quote! {
                     if &hash_bytes == &schema_struct_value.#variant_name.hash {
                         let payload = seq.next_element::<#field_type>()?.ok_or_else(||
-                            serde::de::Error::custom("missing payload"))?;
+                            ::n0_schema::serde::de::Error::custom("missing payload"))?;
                         return Ok(#enum_name::#variant_name(payload));
                     }
                 }
@@ -513,12 +513,12 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Serialize for the enum
-        impl serde::Serialize for #enum_name {
+        impl ::n0_schema::serde::Serialize for #enum_name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
-                S: serde::Serializer,
+                S: ::n0_schema::serde::Serializer,
             {
-                use serde::ser::SerializeTuple;
+                use ::n0_schema::serde::ser::SerializeTuple;
                 let schema_struct_value = #schema_struct_name::get();
 
                 match self {
@@ -528,15 +528,15 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Deserialize for the enum with visitor inside
-        impl<'de> serde::Deserialize<'de> for #enum_name {
+        impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
-                D: serde::Deserializer<'de>,
+                D: ::n0_schema::serde::Deserializer<'de>,
             {
                 // Define the visitor struct inside the deserialize implementation
                 struct Visitor;
 
-                impl<'de> serde::de::Visitor<'de> for Visitor {
+                impl<'de> ::n0_schema::serde::de::Visitor<'de> for Visitor {
                     type Value = #enum_name;
 
                     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -545,11 +545,11 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
                     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
                     where
-                        A: serde::de::SeqAccess<'de>,
+                        A: ::n0_schema::serde::de::SeqAccess<'de>,
                     {
                         // Deserialize the hash discriminator (first element)
                         let hash_bytes = seq.next_element::<[u8; 32]>()?.ok_or_else(||
-                            serde::de::Error::custom("missing hash"))?;
+                            ::n0_schema::serde::de::Error::custom("missing hash"))?;
 
                         // Get the schema hashes
                         let schema_struct_value = #schema_struct_name::get();
@@ -558,7 +558,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         #(#deserialize_branches)*
 
                         // If none matched, return an error
-                        Err(serde::de::Error::custom("unknown discriminator"))
+                        Err(::n0_schema::serde::de::Error::custom("unknown discriminator"))
                     }
                 }
 
@@ -683,7 +683,7 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
                 quote! {
                     if &hash_bytes == &schema_struct_value.#variant_name.hash {
                         let payload = seq.next_element::<#field_type>()?.ok_or_else(||
-                            serde::de::Error::custom("missing payload"))?;
+                            ::n0_schema::serde::de::Error::custom("missing payload"))?;
                         return Ok(#enum_name::#variant_name(payload));
                     }
                 }
@@ -727,12 +727,12 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Serialize for the enum
-        impl serde::Serialize for #enum_name {
+        impl ::n0_schema::serde::Serialize for #enum_name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
-                S: serde::Serializer,
+                S: ::n0_schema::serde::Serializer,
             {
-                use serde::ser::SerializeTuple;
+                use ::n0_schema::serde::ser::SerializeTuple;
                 let schema_struct_value = #schema_struct_name::get();
 
                 match self {
@@ -742,15 +742,15 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Deserialize for the enum with visitor inside
-        impl<'de> serde::Deserialize<'de> for #enum_name {
+        impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
-                D: serde::Deserializer<'de>,
+                D: ::n0_schema::serde::Deserializer<'de>,
             {
                 // Define the visitor struct inside the deserialize implementation
                 struct Visitor;
 
-                impl<'de> serde::de::Visitor<'de> for Visitor {
+                impl<'de> ::n0_schema::serde::de::Visitor<'de> for Visitor {
                     type Value = #enum_name;
 
                     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -759,11 +759,11 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
                     where
-                        A: serde::de::SeqAccess<'de>,
+                        A: ::n0_schema::serde::de::SeqAccess<'de>,
                     {
                         // Deserialize the hash discriminator (first element)
                         let hash_bytes = seq.next_element::<[u8; 32]>()?.ok_or_else(||
-                            serde::de::Error::custom("missing hash"))?;
+                            ::n0_schema::serde::de::Error::custom("missing hash"))?;
 
                         // Get the schema hashes
                         let schema_struct_value = #schema_struct_name::get();
@@ -772,7 +772,7 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
                         #(#deserialize_branches)*
 
                         // If none matched, return an error
-                        Err(serde::de::Error::custom("unknown discriminator"))
+                        Err(::n0_schema::serde::de::Error::custom("unknown discriminator"))
                     }
                 }
 
