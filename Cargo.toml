@@ -35,8 +35,9 @@ anyhow = "1"
 derive_more = { version = "2", features = ["from"] }
 hex = "0.4"
 testresult = "0.4"
-irpc = { version = "1", features = ["rpc", "derive", "noq_endpoint_setup"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+irpc = { version = "1", features = ["rpc", "derive", "noq_endpoint_setup", "iroh"] }
+iroh = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signal", "time"] }
 
 [features]
 derive = ["dep:n0-schema-derive"]
@@ -63,6 +64,10 @@ required-features = ["derive", "irpc"]
 [[example]]
 name = "combined"
 required-features = ["derive", "irpc"]
+
+[[example]]
+name = "meta"
+required-features = ["meta"]
 
 [[test]]
 name = "meta"
