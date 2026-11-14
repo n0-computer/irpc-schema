@@ -105,6 +105,23 @@ See [examples/atom_evolution.rs] for a runnable Color example.
 
 For protocol enums, where each variant is a separate request/response type, use `#[serialize_stable]` (see [examples/protocol.rs]) or `#[serialize_service]` for [irpc] services (see [examples/service.rs]) — these expose a per-variant schema and hash so individual messages can evolve independently. For `serialize_service`, each variant's schema hash includes the request type plus the channel kind (none / oneshot / mpsc) and payload type of both `Rx` and `Tx`, so any change to the response shape — kind or type — flips the hash. The macro crate has no dependency on irpc; the generated code uses `irpc::Channels<S>` from the consuming crate.
 
+# Combining protocols
+
+Since each case of a `serialize_stable` or `serialize_service` enum is identified by its schema hash, not its position, the cases of several such enums never get confused. `#[serialize_union]` combines them into one enum, which serializes exactly like the inner value and deserializes by looking up the hash in each inner enum:
+
+```rust
+#[serialize_union]
+#[derive(Debug)]
+enum Combined {
+    Store(Store),
+    Admin(Admin),
+}
+```
+
+Unions can contain other unions. If two inner enums have a case with the same schema, the first use of the union panics.
+
+For [irpc] services, `#[combine_services]` also implements `irpc::Service` for the union, and generates `Combined::handler(store_tx, admin_tx)`, which returns an `irpc::rpc::Handler` that sends each request to the actor of its service. A server can then serve several services on one ALPN, while each client keeps using its own `Client<Store>` or `Client<Admin>`. See [examples/combined.rs].
+
 [postcard-rpc]: https://github.com/jamesmunns/postcard-rpc
 [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3-specs
 [irpc]: https://docs.rs/irpc
@@ -112,3 +129,4 @@ For protocol enums, where each variant is a separate request/response type, use 
 [examples/atom_evolution.rs]: examples/atom_evolution.rs
 [examples/protocol.rs]: examples/protocol.rs
 [examples/service.rs]: examples/service.rs
+[examples/combined.rs]: examples/combined.rs
