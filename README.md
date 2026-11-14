@@ -81,7 +81,15 @@ Basic rust types such as integers and floating point numbers are supported, as a
 Optional features add atoms for common types from other crates:
 
 - `url`: `Url`
-- `iroh-base`: `PublicKey` (which is `EndpointId`), `EndpointAddr` and `RelayUrl`
+- `iroh-base`: `PublicKey` (which is `EndpointId`) as `"ed25519::PublicKey"`, and `EndpointAddr` and `RelayUrl` as `"iroh::EndpointAddr"` and `"iroh::RelayUrl"`
+
+## Naming atoms
+
+Name an atom after the encoding and meaning it promises, not after the Rust type that implements it. Two types with the same atom are promised to be interchangeable on the wire, and types that are not should have different atoms.
+
+For example, `iroh_blobs::Hash` is a BLAKE3 hash in the same encoding as `blake3::Hash`, so its atom is `"blake3::Hash"`. An iroh `PublicKey` is an Ed25519 public key, so its atom is `"ed25519::PublicKey"`. An `EndpointAddr`, on the other hand, really is specific to iroh, so its atom is `"iroh::EndpointAddr"`. Types from the standard library keep their short names, such as `"PathBuf"`.
+
+Atom names are global, so a name that only says `"Hash"` or `"Key"` is likely to mean different things in different places.
 
 # Fields of other types
 
@@ -90,12 +98,12 @@ A field whose type does not implement `HasSchema`, for example a type from anoth
 ```rust
 #[schema(Nominal)]
 struct Request {
-    #[schema(atom = "Hash")]
+    #[schema(atom = "blake3::Hash")]
     hash: iroh_blobs::Hash,
 }
 ```
 
-The field's schema is then the atom `"Hash"`, and the type does not need to implement `HasSchema`. As with any atom, keeping the serialized format of that type compatible is up to you.
+The field's schema is then the atom `"blake3::Hash"`, and the type does not need to implement `HasSchema`. As with any atom, keeping the serialized format of that type compatible is up to you.
 
 # Recursive types
 
