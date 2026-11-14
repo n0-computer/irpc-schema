@@ -1,6 +1,6 @@
 //! Serves three irpc services on one endpoint, each with its own actor.
 //!
-//! Each client only knows its own service. Since n0-schema identifies each
+//! The clients share one connection, and each only knows its own service. Since n0-schema identifies each
 //! request by the schema hash of its type, the server can tell the requests
 //! of the services apart without any change to their wire format.
 use anyhow::Result;
@@ -153,9 +153,11 @@ async fn main() -> Result<()> {
     tokio::spawn(irpc::noq::listen(server, handler));
 
     let endpoint = irpc::noq::make_client_endpoint("127.0.0.1:0".parse()?, &[&cert])?;
-    let store = Client::<StoreProtocol>::noq(endpoint.clone(), addr);
-    let counter = Client::<CounterProtocol>::noq(endpoint.clone(), addr);
-    let echo = Client::<EchoProtocol>::noq(endpoint.clone(), addr);
+    // One connection for all clients. A connection is untyped, and cloning it is cheap.
+    let connection = endpoint.connect(addr, "localhost")?.await?;
+    let store = Client::<StoreProtocol>::boxed(connection.clone());
+    let counter = Client::<CounterProtocol>::boxed(connection.clone());
+    let echo = Client::<EchoProtocol>::boxed(connection.clone());
 
     store
         .rpc(store::Put {
@@ -181,7 +183,7 @@ async fn main() -> Result<()> {
     assert_eq!(text, "hi");
 
     // A request that no combined service knows fails alone.
-    let later = Client::<later::LaterProtocol>::noq(endpoint.clone(), addr);
+    let later = Client::<later::LaterProtocol>::boxed(connection.clone());
     let err = later
         .rpc(later::Echo {
             text: "hi".into(),
@@ -194,5 +196,14 @@ async fn main() -> Result<()> {
         err.remote_code(),
         Some(irpc::rpc::ErrorCode::RequestDecodeFailed)
     );
+    // The connection is still open for the others.
+    let text = echo
+        .rpc(echo::Echo {
+            text: "still here".into(),
+        })
+        .await?;
+    println!("echo: {text}");
+    assert_eq!(text, "still here");
+    assert!(connection.close_reason().is_none());
     Ok(())
 }
