@@ -157,3 +157,17 @@ fn overlapping_cases_panic() {
         let _ = <Overlapping as StableEnum>::case_schemas();
     });
 }
+
+/// An enum with two cases of the same type, so the same hash.
+#[serialize_stable]
+#[derive(Debug, Clone, PartialEq)]
+enum Duplicate {
+    First(Get),
+    Second(Get),
+}
+
+#[test]
+#[should_panic(expected = "have the same schema hash")]
+fn duplicate_case_types_panic() {
+    let _ = postcard::to_allocvec(&Duplicate::Second(Get { key: "k".into() }));
+}

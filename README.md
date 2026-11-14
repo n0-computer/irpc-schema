@@ -22,7 +22,7 @@ Most rust primitive types are atoms.
 
 ## Structural
 
-When declaring a schema as structural, all naming information will be purged. E.g. a struct with named fields will be considered identital to a tuple or product type, an enum with named fields will be considered identical to a sum type.
+When declaring a schema as structural, all naming information will be purged. E.g. a struct with named fields will be considered identical to a tuple or product type, an enum with named fields will be considered identical to a sum type.
 
 ```rust
 #[schema(Structural)]
@@ -67,6 +67,8 @@ struct Point {
 ```
 
 despite being compatible in terms of serialized representation. Use nominal if you want to attach meaning in addition to the constituent types.
+
+For the request and response types of a protocol, use nominal: a request type is defined by its meaning, not just its shape. Use structural only for types where the names really carry no meaning.
 
 The order of elements in a nominal or structural enum matters.
 
@@ -117,6 +119,50 @@ The pattern: wrap the public type (say `Color`) in a wire enum (`ColorWire`) dec
 See [examples/atom_evolution.rs] for a runnable Color example.
 
 For protocol enums, where each variant is a separate request/response type, use `#[serialize_stable]` (see [examples/protocol.rs]) or `#[serialize_service]` for [irpc] services (see [examples/service.rs]) — these expose a per-variant schema and hash so individual messages can evolve independently. For `serialize_service`, each variant's schema hash includes the request type plus the channel kind (none / oneshot / mpsc) and payload type of both `Rx` and `Tx`, so any change to the response shape — kind or type — flips the hash. The macro crate has no dependency on irpc; the generated code uses `irpc::Channels<S>` from the consuming crate.
+
+Each case must have a distinct schema. Two cases with the same payload type would share a hash, so the first use of the enum panics.
+
+## Wire format
+
+A protocol enum is serialized as a tuple of the 32-byte schema hash of the case and its payload. With postcard, a tuple has no length prefix, so the first 32 bytes of each message are the hash. This format is stable.
+
+## What changes the hash
+
+Each case has its own hash, which depends only on the schema of its payload, and for `serialize_service` its channels. So:
+
+| Change | Hash of the case |
+| --- | --- |
+| Rename a variant of the protocol enum | unchanged |
+| Reorder the variants of the protocol enum | unchanged |
+| Add or remove other variants | unchanged |
+| Rename the payload type, or one of its fields (nominal) | changed |
+| Change the type of a field | changed |
+| Change the response type or channel kind (`serialize_service`) | changed |
+| Rename an atom | changed |
+
+Unlike a plain serde enum, where a request is identified by its position, the order of the variants does not matter. A peer that does not know a hash fails to decode only that message.
+
+## With irpc
+
+Put `#[rpc_requests]` above `#[serialize_service]`. The payload and response types need `HasSchema`, usually from `#[schema(Nominal)]`:
+
+```rust
+#[schema(Nominal)]
+#[derive(Debug, Serialize, Deserialize)]
+struct Get {
+    key: String,
+}
+
+#[rpc_requests(message = StoreMessage)]
+#[serialize_service(StoreProtocol)]
+#[derive(Debug)]
+enum StoreProtocol {
+    #[rpc(tx = oneshot::Sender<Option<String>>)]
+    Get(Get),
+}
+```
+
+A server that should survive requests it does not know uses `Handler::skip_bad_requests(true)`. The client of such a request then gets an error with `remote_code() == Some(ErrorCode::RequestDecodeFailed)`, and the connection stays open, so the client can fall back to an older request.
 
 # Combining protocols
 

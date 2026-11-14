@@ -394,7 +394,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// This is identical to `serialize_stable`, but for a specific service.
 ///
 /// The schema hashes for each variant will include not just the message type itself,
-/// but also the kind (none, oneshot, spsc) and type of tx and rx channels it uses.
+/// but also the kind (none, oneshot, mpsc) and type of tx and rx channels it uses.
 ///
 /// That way any change to channel kinds and types will result in a different hash,
 /// just like a change to the message type itself.
@@ -407,7 +407,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// This macro requires that `irpc::Channels` is implemented for the given service type
 /// for each variant of the enum. It also requires that HasSchema is implemented for
-/// all channlels payload types.
+/// all channel payload types.
 #[proc_macro_attribute]
 pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
     let service = parse_macro_input!(attr as syn::Ident);
@@ -442,6 +442,7 @@ fn stable_enum(
     schema_of: impl Fn(&syn::Type) -> proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let enum_name = &input.ident;
+    let enum_str = enum_name.to_string();
     let variants = single_field_variants(&input)?;
     let names: Vec<_> = variants.iter().map(|(name, _)| *name).collect();
     let name_strs: Vec<_> = names.iter().map(|name| name.to_string()).collect();
@@ -461,8 +462,16 @@ fn stable_enum(
 
             fn schemas() -> &'static Schemas {
                 static SCHEMAS: ::std::sync::OnceLock<Schemas> = ::std::sync::OnceLock::new();
-                SCHEMAS.get_or_init(|| Schemas {
-                    #(#names: ::n0_schema::SchemaAndHash::from(#schemas)),*
+                SCHEMAS.get_or_init(|| {
+                    let s = Schemas {
+                        #(#names: ::n0_schema::SchemaAndHash::from(#schemas)),*
+                    };
+                    // Two cases with the same schema would share a hash, and the second could never be read.
+                    let cases = [#((#name_strs, s.#names.hash)),*];
+                    if let Err(err) = ::n0_schema::check_disjoint_cases(#enum_str, cases) {
+                        panic!("{err}");
+                    }
+                    s
                 })
             }
 
