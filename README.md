@@ -68,6 +68,8 @@ struct Point {
 
 despite being compatible in terms of serialized representation. Use nominal if you want to attach meaning in addition to the constituent types.
 
+The name defaults to the name of the Rust type. `#[schema(Nominal(name = "my_crate::Point"))]` sets it explicitly, for example to keep the schema when renaming the type, or to make a name unlikely to collide with other protocols.
+
 For the request and response types of a protocol, use nominal: a request type is defined by its meaning, not just its shape. Use structural only for types where the names really carry no meaning.
 
 The order of elements in a nominal or structural enum matters.

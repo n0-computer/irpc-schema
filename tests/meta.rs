@@ -50,7 +50,7 @@ enum Server {
 fn list_cases_hash_is_stable() {
     assert_eq!(
         hex::encode(request_hash::<MetaProtocol, ListCases>()),
-        "dce4679550c5f4a862703dec4350fde7f2c828ff75d996b6f0e5d73341b97073"
+        "1638de147d69bebaaad557ce149756c493679f43144664bd886e990bb91b9968"
     );
 }
 

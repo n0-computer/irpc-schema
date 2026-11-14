@@ -25,12 +25,15 @@ use serde::{Deserialize, Serialize};
 use crate::{schema, serialize_service, StableEnum};
 
 /// Lists the cases that a server supports.
-#[schema(Nominal)]
+///
+/// The schema names of the meta types have a prefix, so that no other
+/// protocol has a request with the same schema by accident.
+#[schema(Nominal(name = "n0_schema::meta::ListCases"))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ListCases {}
 
 /// One case that a server supports.
-#[schema(Nominal)]
+#[schema(Nominal(name = "n0_schema::meta::CaseInfo"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaseInfo {
     /// The name of the variant on the server, for people.
