@@ -95,6 +95,19 @@ struct Request {
 
 The field's schema is then the atom `"Hash"`, and the type does not need to implement `HasSchema`. As with any atom, keeping the serialized format of that type compatible is up to you.
 
+# Recursive types
+
+Schemas are trees, so deriving a schema for a recursive type would never end. Declare a recursive type as an atom instead, which promises its shape by name:
+
+```rust
+#[schema(Atom(name = "Tree"))]
+struct Tree {
+    children: Vec<Tree>,
+}
+```
+
+This is in line with the rest of the crate: n0-schema checks the structure where that is cheap, and relies on named promises everywhere else.
+
 # Schema evolution
 
 For complex atom types that should be able to evolve, the best way is to introduce a version varint to the serde serialization. This isn't different to what you would do in serde without using n0-schema.
