@@ -49,8 +49,10 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => panic!("Unsupported schema type"),
     };
 
+    let mut output = input.clone();
+    strip_field_attributes(&mut output.data);
     let expanded = quote! {
-        #input
+        #output
 
         impl ::n0_schema::HasSchema for #name {
             fn schema() -> ::n0_schema::Schema {
@@ -60,6 +62,50 @@ pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+/// Returns the schema of a field.
+///
+/// `#[schema(atom = "Name")]` on the field makes its schema the atom `Name`,
+/// for a field type that does not implement `HasSchema`, such as a type from
+/// another crate. Otherwise the schema comes from the type's `HasSchema`.
+fn field_schema(field: &syn::Field) -> proc_macro2::TokenStream {
+    let mut atom = None;
+    for attr in field.attrs.iter().filter(|a| a.path().is_ident("schema")) {
+        let parsed = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("atom") {
+                let value: syn::LitStr = meta.value()?.parse()?;
+                atom = Some(value.value());
+                Ok(())
+            } else {
+                Err(meta.error("expected `atom = \"Name\"`"))
+            }
+        });
+        if let Err(err) = parsed {
+            return err.to_compile_error();
+        }
+    }
+    match atom {
+        Some(name) => quote! { ::n0_schema::Schema::Atom(#name.to_string()) },
+        None => {
+            let ty = &field.ty;
+            quote! { <#ty as ::n0_schema::HasSchema>::schema() }
+        }
+    }
+}
+
+/// Removes `#[schema(...)]` from all fields, since the compiler does not know it there.
+fn strip_field_attributes(data: &mut syn::Data) {
+    let strip = |fields: &mut Fields| {
+        for field in fields.iter_mut() {
+            field.attrs.retain(|a| !a.path().is_ident("schema"));
+        }
+    };
+    match data {
+        Data::Struct(data) => strip(&mut data.fields),
+        Data::Enum(data) => data.variants.iter_mut().for_each(|v| strip(&mut v.fields)),
+        Data::Union(_) => {}
+    }
 }
 
 // Generates an Atom schema (just the type name)
@@ -85,9 +131,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .named
                     .iter()
                     .map(|f| {
-                        let ty = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            <#ty as ::n0_schema::HasSchema>::schema()
+                            #field_schema
                         }
                     })
                     .collect();
@@ -106,9 +152,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                     .unnamed
                     .iter()
                     .map(|f| {
-                        let ty = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            <#ty as ::n0_schema::HasSchema>::schema()
+                            #field_schema
                         }
                     })
                     .collect();
@@ -136,9 +182,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .named
                             .iter()
                             .map(|f| {
-                                let ty = &f.ty;
+                                let field_schema = field_schema(f);
                                 quote! {
-                                    <#ty as ::n0_schema::HasSchema>::schema()
+                                    #field_schema
                                 }
                             })
                             .collect(),
@@ -146,9 +192,9 @@ fn generate_structural_schema(data: &syn::Data) -> proc_macro2::TokenStream {
                             .unnamed
                             .iter()
                             .map(|f| {
-                                let ty = &f.ty;
+                                let field_schema = field_schema(f);
                                 quote! {
-                                    <#ty as ::n0_schema::HasSchema>::schema()
+                                    #field_schema
                                 }
                             })
                             .collect(),
@@ -193,9 +239,9 @@ fn generate_nominal_schema(
                     .iter()
                     .map(|f| {
                         let field_name = f.ident.as_ref().unwrap().to_string();
-                        let field_type = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            ::n0_schema::Named(#field_name.to_string(), <#field_type as ::n0_schema::HasSchema>::schema())
+                            ::n0_schema::Named(#field_name.to_string(), #field_schema)
                         }
                     })
                     .collect();
@@ -215,9 +261,9 @@ fn generate_nominal_schema(
                     .unnamed
                     .iter()
                     .map(|f| {
-                        let field_type = &f.ty;
+                        let field_schema = field_schema(f);
                         quote! {
-                            <#field_type as ::n0_schema::HasSchema>::schema()
+                            #field_schema
                         }
                     })
                     .collect();
@@ -251,10 +297,10 @@ fn generate_nominal_schema(
                                 .named
                                 .iter()
                                 .map(|f| {
-                                    let field_type = &f.ty;
+                                    let field_schema = field_schema(f);
                                     let field_name = f.ident.as_ref().unwrap().to_string();
                                     quote! {
-                                        ::n0_schema::Named(#field_name.to_string(),<#field_type as ::n0_schema::HasSchema>::schema())
+                                        ::n0_schema::Named(#field_name.to_string(),#field_schema)
                                     }
                                 })
                                 .collect::<Vec<_>>();
@@ -277,9 +323,9 @@ fn generate_nominal_schema(
                                 .unnamed
                                 .iter()
                                 .map(|f| {
-                                    let field_type = &f.ty;
+                                    let field_schema = field_schema(f);
                                     quote! {
-                                        <#field_type as ::n0_schema::HasSchema>::schema()
+                                        #field_schema
                                     }
                                 })
                                 .collect::<Vec<_>>();
@@ -422,7 +468,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 quote! {
                     if &hash_bytes == &schema_struct_value.#variant_name.hash {
                         let payload = seq.next_element::<#field_type>()?.ok_or_else(||
-                            serde::de::Error::custom("missing payload"))?;
+                            ::n0_schema::serde::de::Error::custom("missing payload"))?;
                         return Ok(#enum_name::#variant_name(payload));
                     }
                 }
@@ -467,12 +513,12 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Serialize for the enum
-        impl serde::Serialize for #enum_name {
+        impl ::n0_schema::serde::Serialize for #enum_name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
-                S: serde::Serializer,
+                S: ::n0_schema::serde::Serializer,
             {
-                use serde::ser::SerializeTuple;
+                use ::n0_schema::serde::ser::SerializeTuple;
                 let schema_struct_value = #schema_struct_name::get();
 
                 match self {
@@ -482,15 +528,15 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Deserialize for the enum with visitor inside
-        impl<'de> serde::Deserialize<'de> for #enum_name {
+        impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
-                D: serde::Deserializer<'de>,
+                D: ::n0_schema::serde::Deserializer<'de>,
             {
                 // Define the visitor struct inside the deserialize implementation
                 struct Visitor;
 
-                impl<'de> serde::de::Visitor<'de> for Visitor {
+                impl<'de> ::n0_schema::serde::de::Visitor<'de> for Visitor {
                     type Value = #enum_name;
 
                     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -499,11 +545,11 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
                     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
                     where
-                        A: serde::de::SeqAccess<'de>,
+                        A: ::n0_schema::serde::de::SeqAccess<'de>,
                     {
                         // Deserialize the hash discriminator (first element)
                         let hash_bytes = seq.next_element::<[u8; 32]>()?.ok_or_else(||
-                            serde::de::Error::custom("missing hash"))?;
+                            ::n0_schema::serde::de::Error::custom("missing hash"))?;
 
                         // Get the schema hashes
                         let schema_struct_value = #schema_struct_name::get();
@@ -512,7 +558,7 @@ pub fn serialize_stable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         #(#deserialize_branches)*
 
                         // If none matched, return an error
-                        Err(serde::de::Error::custom("unknown discriminator"))
+                        Err(::n0_schema::serde::de::Error::custom("unknown discriminator"))
                     }
                 }
 
@@ -637,7 +683,7 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
                 quote! {
                     if &hash_bytes == &schema_struct_value.#variant_name.hash {
                         let payload = seq.next_element::<#field_type>()?.ok_or_else(||
-                            serde::de::Error::custom("missing payload"))?;
+                            ::n0_schema::serde::de::Error::custom("missing payload"))?;
                         return Ok(#enum_name::#variant_name(payload));
                     }
                 }
@@ -681,12 +727,12 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Serialize for the enum
-        impl serde::Serialize for #enum_name {
+        impl ::n0_schema::serde::Serialize for #enum_name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
-                S: serde::Serializer,
+                S: ::n0_schema::serde::Serializer,
             {
-                use serde::ser::SerializeTuple;
+                use ::n0_schema::serde::ser::SerializeTuple;
                 let schema_struct_value = #schema_struct_name::get();
 
                 match self {
@@ -696,15 +742,15 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         // Implementation of serde::Deserialize for the enum with visitor inside
-        impl<'de> serde::Deserialize<'de> for #enum_name {
+        impl<'de> ::n0_schema::serde::Deserialize<'de> for #enum_name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
-                D: serde::Deserializer<'de>,
+                D: ::n0_schema::serde::Deserializer<'de>,
             {
                 // Define the visitor struct inside the deserialize implementation
                 struct Visitor;
 
-                impl<'de> serde::de::Visitor<'de> for Visitor {
+                impl<'de> ::n0_schema::serde::de::Visitor<'de> for Visitor {
                     type Value = #enum_name;
 
                     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -713,11 +759,11 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
                     where
-                        A: serde::de::SeqAccess<'de>,
+                        A: ::n0_schema::serde::de::SeqAccess<'de>,
                     {
                         // Deserialize the hash discriminator (first element)
                         let hash_bytes = seq.next_element::<[u8; 32]>()?.ok_or_else(||
-                            serde::de::Error::custom("missing hash"))?;
+                            ::n0_schema::serde::de::Error::custom("missing hash"))?;
 
                         // Get the schema hashes
                         let schema_struct_value = #schema_struct_name::get();
@@ -726,7 +772,7 @@ pub fn serialize_service(attr: TokenStream, item: TokenStream) -> TokenStream {
                         #(#deserialize_branches)*
 
                         // If none matched, return an error
-                        Err(serde::de::Error::custom("unknown discriminator"))
+                        Err(::n0_schema::serde::de::Error::custom("unknown discriminator"))
                     }
                 }
 

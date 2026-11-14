@@ -74,6 +74,27 @@ The order of elements in a nominal or structural enum matters.
 
 Basic rust types such as integers and floating point numbers are supported, as are rust collections such as BTreeSet/Map and HashSet/Map.
 
+`PathBuf`, `Duration` and the `std::net` address types are atoms with their short name, such as `"PathBuf"` or `"SocketAddr"`.
+
+Optional features add atoms for common types from other crates:
+
+- `url`: `Url`
+- `iroh-base`: `PublicKey` (which is `EndpointId`), `EndpointAddr` and `RelayUrl`
+
+# Fields of other types
+
+A field whose type does not implement `HasSchema`, for example a type from another crate, can name its schema as an atom:
+
+```rust
+#[schema(Nominal)]
+struct Request {
+    #[schema(atom = "Hash")]
+    hash: iroh_blobs::Hash,
+}
+```
+
+The field's schema is then the atom `"Hash"`, and the type does not need to implement `HasSchema`. As with any atom, keeping the serialized format of that type compatible is up to you.
+
 # Schema evolution
 
 For complex atom types that should be able to evolve, the best way is to introduce a version varint to the serde serialization. This isn't different to what you would do in serde without using n0-schema.
